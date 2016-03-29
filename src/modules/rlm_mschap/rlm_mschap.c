@@ -517,7 +517,7 @@ static int _mod_conn_free(struct wbcContext **wb_ctx)
 /*
  *	Create connection pool winbind context
  */
-static void *mod_conn_create(TALLOC_CTX *ctx, UNUSED void *instance, UNUSED struct timeval *timeout)
+static void *mod_conn_create(TALLOC_CTX *ctx, UNUSED void *instance, UNUSED struct timeval const *timeout)
 {
 	struct wbcContext **wb_ctx;
 
@@ -1478,6 +1478,272 @@ static rlm_rcode_t mschap_error(rlm_mschap_t *inst, REQUEST *request, unsigned c
 	return rcode;
 }
 
+
+/*
+ *	find_nt_password() - try and find a correct NT-Password
+ *	attribute, or calculate one if possible.
+ */
+static bool CC_HINT(nonnull (1, 2, 4)) find_nt_password(rlm_mschap_t *inst,
+							REQUEST *request,
+							VALUE_PAIR *password,
+							VALUE_PAIR **ntpw)
+{
+	VALUE_PAIR *nt_password;
+
+	/*
+	 *	Look for NT-Password...
+	 */
+	nt_password = fr_pair_find_by_num(request->control, 0, PW_NT_PASSWORD, TAG_ANY);
+	if (nt_password) {
+		VERIFY_VP(nt_password);
+
+		switch (nt_password->vp_length) {
+		case NT_DIGEST_LENGTH:
+			RDEBUG2("Found NT-Password");
+			break;
+
+		/* 0x */
+		case 34:
+		case 32:
+			RWDEBUG("NT-Password has not been normalized by the 'pap' module (likely still in hex format).  "
+				"Authentication may fail");
+			nt_password = NULL;
+			break;
+
+		default:
+			RWDEBUG("NT-Password found but incorrect length, expected " STRINGIFY(NT_DIGEST_LENGTH)
+				" bytes got %zu bytes.  Authentication may fail", nt_password->vp_length);
+			nt_password = NULL;
+			break;
+		}
+	}
+
+	/*
+	 *	... or a Cleartext-Password, which we now transform into an NT-Password
+	 */
+	if (!nt_password) {
+		uint8_t *p;
+
+		if (password) {
+			RDEBUG2("Found Cleartext-Password, hashing to create NT-Password");
+			nt_password = pair_make_config("NT-Password", NULL, T_OP_EQ);
+			if (!nt_password) {
+				RERROR("No memory");
+				return false;
+			}
+			p = talloc_array(nt_password, uint8_t, NT_DIGEST_LENGTH);
+			fr_pair_value_memsteal(nt_password, p);
+
+			if (mschap_ntpwdhash(p, password->vp_strvalue) < 0) {
+				RERROR("Failed generating NT-Password");
+				return false;
+			}
+		} else if (inst->method == AUTH_INTERNAL) {
+			RWDEBUG2("No Cleartext-Password configured.  Cannot create NT-Password");
+		}
+	}
+
+	*ntpw = nt_password;
+	return true;
+}
+
+
+/*
+ *	find_lm_password() - try and find a correct LM-Password
+ *	attribute.
+ */
+static bool CC_HINT(nonnull (1, 2, 5)) find_lm_password(rlm_mschap_t *inst,
+							REQUEST *request,
+							VALUE_PAIR *password,
+							VALUE_PAIR *nt_password,
+							VALUE_PAIR **lmpw)
+{
+	VALUE_PAIR *lm_password;
+
+	lm_password = fr_pair_find_by_num(request->control, 0, PW_LM_PASSWORD, TAG_ANY);
+	if (lm_password) {
+		VERIFY_VP(lm_password);
+
+		switch (lm_password->vp_length) {
+		case LM_DIGEST_LENGTH:
+			RDEBUG2("Found LM-Password");
+			break;
+
+		/* 0x */
+		case 34:
+		case 32:
+			RWDEBUG("LM-Password has not been normalized by the 'pap' module (likely still in hex format).  "
+				"Authentication may fail");
+			lm_password = NULL;
+			break;
+
+		default:
+			RWDEBUG("LM-Password found but incorrect length, expected " STRINGIFY(LM_DIGEST_LENGTH)
+				" bytes got %zu bytes.  Authentication may fail", lm_password->vp_length);
+			lm_password = NULL;
+			break;
+		}
+	}
+	/*
+	 *	If we can't find an LM-Password, try and create one from password
+	 */
+	if (!lm_password) {
+		uint8_t *p;
+
+		if (password) {
+			RDEBUG2("Found Cleartext-Password, hashing to create LM-Password");
+			lm_password = pair_make_config("LM-Password", NULL, T_OP_EQ);
+			if (!lm_password) {
+				RERROR("No memory");
+				return false;
+			}
+
+			p = talloc_array(lm_password, uint8_t, LM_DIGEST_LENGTH);
+			fr_pair_value_memsteal(lm_password, p);
+			smbdes_lmpwdhash(password->vp_strvalue, p);
+
+		/*
+		 *	Only complain if we don't have NT-Password
+		 */
+		} else if (inst->method == AUTH_INTERNAL && !nt_password) {
+			RWDEBUG2("No Cleartext-Password configured.  Cannot create LM-Password");
+		}
+	}
+
+	*lmpw = lm_password;
+	return true;
+}
+
+
+/*
+ *	process_cpw_request() - do the work to handle an MS-CHAP password
+ *	change request.
+ */
+static rlm_rcode_t CC_HINT(nonnull) process_cpw_request(rlm_mschap_t *inst,
+							REQUEST *request,
+							VALUE_PAIR *cpw,
+							VALUE_PAIR *nt_password)
+{
+	uint8_t		new_nt_encrypted[516], old_nt_encrypted[NT_DIGEST_LENGTH];
+	VALUE_PAIR	*nt_enc=NULL;
+	int		seq, new_nt_enc_len;
+
+	/*
+	 *	mschap2 password change request.
+	 *
+	 *	We cheat - first decode and execute the passchange.
+	 *	Then extract the response, add it into the request
+	 *	and then jump into mschap2 auth with the challenge/
+	 *	response.
+	 */
+	RDEBUG("MS-CHAPv2 password change request received");
+
+	if (cpw->vp_length != 68) {
+		REDEBUG("MS-CHAP2-CPW has the wrong format: length %zu != 68", cpw->vp_length);
+		return RLM_MODULE_INVALID;
+	}
+
+	if (cpw->vp_octets[0] != 7) {
+		REDEBUG("MS-CHAP2-CPW has the wrong format: code %d != 7", cpw->vp_octets[0]);
+		return RLM_MODULE_INVALID;
+	}
+
+	/*
+	 *	Look for the new (encrypted) password.
+	 *
+	 *	Bah, stupid composite attributes...
+	 *	we're expecting 3 attributes with the leading bytes -
+	 *	06:<mschapid>:00:01:<1st chunk>
+	 *	06:<mschapid>:00:02:<2nd chunk>
+	 *	06:<mschapid>:00:03:<3rd chunk>
+	 */
+	new_nt_enc_len = 0;
+	for (seq = 1; seq < 4; seq++) {
+		vp_cursor_t cursor;
+		int found = 0;
+
+		for (nt_enc = fr_cursor_init(&cursor, &request->packet->vps);
+		     nt_enc;
+		     nt_enc = fr_cursor_next(&cursor)) {
+			if (nt_enc->da->vendor != VENDORPEC_MICROSOFT)
+				continue;
+
+			if (nt_enc->da->attr != PW_MSCHAP_NT_ENC_PW)
+				continue;
+
+			if (nt_enc->vp_length < 4) {
+				REDEBUG("MS-CHAP-NT-Enc-PW with invalid format");
+				return RLM_MODULE_INVALID;
+			}
+
+			if (nt_enc->vp_octets[0] != 6) {
+				REDEBUG("MS-CHAP-NT-Enc-PW with invalid format");
+				return RLM_MODULE_INVALID;
+			}
+
+			if ((nt_enc->vp_octets[2] == 0) && (nt_enc->vp_octets[3] == seq)) {
+				found = 1;
+				break;
+			}
+		}
+
+		if (!found) {
+			REDEBUG("Could not find MS-CHAP-NT-Enc-PW w/ sequence number %d", seq);
+			return RLM_MODULE_INVALID;
+		}
+
+		if ((new_nt_enc_len + nt_enc->vp_length - 4) > sizeof(new_nt_encrypted)) {
+			REDEBUG("Unpacked MS-CHAP-NT-Enc-PW length > 516");
+			return RLM_MODULE_INVALID;
+		}
+
+		memcpy(new_nt_encrypted + new_nt_enc_len, nt_enc->vp_octets + 4, nt_enc->vp_length - 4);
+		new_nt_enc_len += nt_enc->vp_length - 4;
+	}
+
+	if (new_nt_enc_len != 516) {
+		REDEBUG("Unpacked MS-CHAP-NT-Enc-PW length != 516");
+		return RLM_MODULE_INVALID;
+	}
+
+	/*
+	 *	RFC 2548 is confusing here. It claims:
+	 *
+	 *	1 byte code
+	 *	1 byte ident
+	 *	16 octets - old hash encrypted with new hash
+	 *	24 octets - peer challenge
+	 *	  this is actually:
+	 *	  16 octets - peer challenge
+	 *	   8 octets - reserved
+	 *	24 octets - nt response
+	 *	2 octets  - flags (ignored)
+	 */
+
+	memcpy(old_nt_encrypted, cpw->vp_octets + 2, sizeof(old_nt_encrypted));
+
+	RDEBUG2("Password change payload valid");
+
+	/*
+	 *	Perform the actual password change
+	 */
+	if (do_mschap_cpw(inst, request, nt_password, new_nt_encrypted, old_nt_encrypted, inst->method) < 0) {
+		char buffer[128];
+
+		REDEBUG("Password change failed");
+
+		snprintf(buffer, sizeof(buffer), "E=709 R=0 M=Password change failed");
+		mschap_add_reply(request, cpw->vp_octets[1], "MS-CHAP-Error", buffer, strlen(buffer));
+
+		return RLM_MODULE_REJECT;
+	}
+
+	RDEBUG("Password change successful");
+
+	return RLM_MODULE_OK;
+}
+
+
 /*
  *	mod_authenticate() - authenticate user based on given
  *	attributes and configuration.
@@ -1561,227 +1827,38 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	password = fr_pair_find_by_num(request->control, 0, PW_CLEARTEXT_PASSWORD, TAG_ANY);
 
 	/*
-	 *	We need an NT-Password.
+	 *	Look for or create an NT-Password
 	 */
-	nt_password = fr_pair_find_by_num(request->control, 0, PW_NT_PASSWORD, TAG_ANY);
-	if (nt_password) {
-		VERIFY_VP(nt_password);
-
-		switch (nt_password->vp_length) {
-		case NT_DIGEST_LENGTH:
-			RDEBUG2("Found NT-Password");
-			break;
-
-		/* 0x */
-		case 34:
-		case 32:
-			RWDEBUG("NT-Password has not been normalized by the 'pap' module (likely still in hex format).  "
-				"Authentication may fail");
-			nt_password = NULL;
-			break;
-
-		default:
-			RWDEBUG("NT-Password found but incorrect length, expected " STRINGIFY(NT_DIGEST_LENGTH)
-				" bytes got %zu bytes.  Authentication may fail", nt_password->vp_length);
-			nt_password = NULL;
-			break;
-		}
+	if (!find_nt_password(instance, request, password, &nt_password)) {
+		return RLM_MODULE_FAIL;
 	}
 
 	/*
-	 *	... or a Cleartext-Password, which we now transform into an NT-Password
+	 *	Look for or create an LM-Password
 	 */
-	if (!nt_password) {
-		uint8_t *p;
-
-		if (password) {
-			RDEBUG2("Found Cleartext-Password, hashing to create NT-Password");
-			nt_password = pair_make_config("NT-Password", NULL, T_OP_EQ);
-			if (!nt_password) {
-				RERROR("No memory");
-				return RLM_MODULE_FAIL;
-			}
-			p = talloc_array(nt_password, uint8_t, NT_DIGEST_LENGTH);
-			fr_pair_value_memsteal(nt_password, p);
-
-			if (mschap_ntpwdhash(p, password->vp_strvalue) < 0) {
-				RERROR("Failed generating NT-Password");
-				return RLM_MODULE_FAIL;
-			}
-		} else if (auth_method == AUTH_INTERNAL) {
-			RWDEBUG2("No Cleartext-Password configured.  Cannot create NT-Password");
-		}
+	if (!find_lm_password(instance, request, password, nt_password, &lm_password)) {
+		return RLM_MODULE_FAIL;
 	}
+
 
 	/*
-	 *	Or an LM-Password.
+	 *	Check to see if this is a change password request, and process
+	 *	it accordingly if so.
 	 */
-	lm_password = fr_pair_find_by_num(request->control, 0, PW_LM_PASSWORD, TAG_ANY);
-	if (lm_password) {
-		VERIFY_VP(lm_password);
-
-		switch (lm_password->vp_length) {
-		case LM_DIGEST_LENGTH:
-			RDEBUG2("Found LM-Password");
-			break;
-
-		/* 0x */
-		case 34:
-		case 32:
-			RWDEBUG("LM-Password has not been normalized by the 'pap' module (likely still in hex format).  "
-				"Authentication may fail");
-			lm_password = NULL;
-			break;
-
-		default:
-			RWDEBUG("LM-Password found but incorrect length, expected " STRINGIFY(LM_DIGEST_LENGTH)
-				" bytes got %zu bytes.  Authentication may fail", lm_password->vp_length);
-			lm_password = NULL;
-			break;
-		}
-	}
-	/*
-	 *	... or a Cleartext-Password, which we now transform into an LM-Password
-	 */
-	if (!lm_password) {
-		if (password) {
-			RDEBUG2("Found Cleartext-Password, hashing to create LM-Password");
-			lm_password = pair_make_config("LM-Password", NULL, T_OP_EQ);
-			if (!lm_password) {
-				RERROR("No memory");
-			} else {
-				uint8_t *p;
-
-				p = talloc_array(lm_password, uint8_t, LM_DIGEST_LENGTH);
-				fr_pair_value_memsteal(lm_password, p);
-				smbdes_lmpwdhash(password->vp_strvalue, p);
-			}
-		/*
-		 *	Only complain if we don't have NT-Password
-		 */
-		} else if ((auth_method == AUTH_INTERNAL) && !nt_password) {
-			RWDEBUG2("No Cleartext-Password configured.  Cannot create LM-Password");
-		}
-	}
-
 	cpw = fr_pair_find_by_num(request->packet->vps, VENDORPEC_MICROSOFT, PW_MSCHAP2_CPW, TAG_ANY);
 	if (cpw) {
-		/*
-		 * mschap2 password change request
-		 * we cheat - first decode and execute the passchange
-		 * we then extract the response, add it into the request
-		 * then jump into mschap2 auth with the chal/resp
-		 */
-		uint8_t		new_nt_encrypted[516], old_nt_encrypted[NT_DIGEST_LENGTH];
-		VALUE_PAIR	*nt_enc=NULL;
-		int		seq, new_nt_enc_len;
 		uint8_t		*p;
+		rlm_rcode_t	rc;
 
-		RDEBUG("MS-CHAPv2 password change request received");
-
-		if (cpw->vp_length != 68) {
-			REDEBUG("MS-CHAP2-CPW has the wrong format: length %zu != 68", cpw->vp_length);
-			return RLM_MODULE_INVALID;
-		}
-
-		if (cpw->vp_octets[0] != 7) {
-			REDEBUG("MS-CHAP2-CPW has the wrong format: code %d != 7", cpw->vp_octets[0]);
-			return RLM_MODULE_INVALID;
+		rc = process_cpw_request(instance, request, cpw, nt_password);
+		if (rc != RLM_MODULE_OK) {
+			return rc;
 		}
 
 		/*
-		 *  look for the new (encrypted) password
-		 *  bah stupid composite attributes
-		 *  we're expecting 3 attributes with the leading bytes
-		 *  06:<mschapid>:00:01:<1st chunk>
-		 *  06:<mschapid>:00:02:<2nd chunk>
-		 *  06:<mschapid>:00:03:<3rd chunk>
-		 */
-		new_nt_enc_len = 0;
-		for (seq = 1; seq < 4; seq++) {
-			vp_cursor_t cursor;
-			int found = 0;
-
-			for (nt_enc = fr_cursor_init(&cursor, &request->packet->vps);
-			     nt_enc;
-			     nt_enc = fr_cursor_next(&cursor)) {
-				if (nt_enc->da->vendor != VENDORPEC_MICROSOFT)
-					continue;
-
-				if (nt_enc->da->attr != PW_MSCHAP_NT_ENC_PW)
-					continue;
-
-				if (nt_enc->vp_length < 4) {
-					REDEBUG("MS-CHAP-NT-Enc-PW with invalid format");
-					return RLM_MODULE_INVALID;
-				}
-
-				if (nt_enc->vp_octets[0] != 6) {
-					REDEBUG("MS-CHAP-NT-Enc-PW with invalid format");
-					return RLM_MODULE_INVALID;
-				}
-
-				if ((nt_enc->vp_octets[2] == 0) && (nt_enc->vp_octets[3] == seq)) {
-					found = 1;
-					break;
-				}
-			}
-
-			if (!found) {
-				REDEBUG("Could not find MS-CHAP-NT-Enc-PW w/ sequence number %d", seq);
-				return RLM_MODULE_INVALID;
-			}
-
-			if ((new_nt_enc_len + nt_enc->vp_length - 4) > sizeof(new_nt_encrypted)) {
-				REDEBUG("Unpacked MS-CHAP-NT-Enc-PW length > 516");
-				return RLM_MODULE_INVALID;
-			}
-
-			memcpy(new_nt_encrypted + new_nt_enc_len, nt_enc->vp_octets + 4, nt_enc->vp_length - 4);
-			new_nt_enc_len += nt_enc->vp_length - 4;
-		}
-
-		if (new_nt_enc_len != 516) {
-			REDEBUG("Unpacked MS-CHAP-NT-Enc-PW length != 516");
-			return RLM_MODULE_INVALID;
-		}
-
-		/*
-		 * RFC 2548 is confusing here
-		 * it claims:
-		 *
-		 * 1 byte code
-		 * 1 byte ident
-		 * 16 octets - old hash encrypted with new hash
-		 * 24 octets - peer challenge
-		 *   this is actually:
-		 *   16 octets - peer challenge
-		 *    8 octets - reserved
-		 * 24 octets - nt response
-		 * 2 octets  - flags (ignored)
-		 */
-
-		memcpy(old_nt_encrypted, cpw->vp_octets + 2, sizeof(old_nt_encrypted));
-
-		RDEBUG2("Password change payload valid");
-
-		/* perform the actual password change */
-		if (do_mschap_cpw(inst, request, nt_password, new_nt_encrypted, old_nt_encrypted, auth_method) < 0) {
-			char buffer[128];
-
-			REDEBUG("Password change failed");
-
-			snprintf(buffer, sizeof(buffer), "E=709 R=0 M=Password change failed");
-			mschap_add_reply(request, cpw->vp_octets[1], "MS-CHAP-Error", buffer, strlen(buffer));
-
-			return RLM_MODULE_REJECT;
-		}
-		RDEBUG("Password change successful");
-
-		/*
-		 *  Clear any expiry bit so the user can now login;
-		 *  obviously the password change action will need
-		 *  to have cleared this bit in the config/SQL/wherever
+		 *	Clear any expiry bit so the user can now login;
+		 *	obviously the password change action will need
+		 *	to have cleared this bit in the config/SQL/wherever.
 		 */
 		if (smb_ctrl && smb_ctrl->vp_integer & ACB_PW_EXPIRED) {
 			RDEBUG("Clearing expiry bit in SMB-Acct-Ctrl to allow authentication");
@@ -1789,13 +1866,13 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		}
 
 		/*
-		 *  Extract the challenge & response from the end of the password
-		 *  change, add them into the request and then continue with
-		 *  the authentication
+		 *	Extract the challenge & response from the end of the
+		 *	password change, add them into the request and then
+		 *	continue with the authentication.
 		 */
 		response = radius_pair_create(request->packet, &request->packet->vps,
-					     PW_MSCHAP2_RESPONSE,
-					     VENDORPEC_MICROSOFT);
+					PW_MSCHAP2_RESPONSE,
+					VENDORPEC_MICROSOFT);
 		p = talloc_array(response, uint8_t, 50);
 
 		/* ident & flags */
