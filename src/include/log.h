@@ -118,6 +118,9 @@ void	radlog_request_hex(log_type_t type, log_lvl_t lvl, REQUEST *request,
 			   uint8_t const *data, size_t data_len)
 	CC_HINT(nonnull);
 
+void	radlog_hex(log_type_t type, log_lvl_t lvl, uint8_t const *data, size_t data_len)
+	CC_HINT(nonnull);
+
 /** Prefix for global log messages
  *
  * Should be defined in source file (before including radius.h) to add prefix to
@@ -398,6 +401,13 @@ do {\
 		}\
 	} else _x;\
 } while (0)
+
+#define RHEXDUMP(lvl, msg, data, len) \
+	if (rad_debug_lvl >= lvl) do {		\
+		radlog_request(L_DBG, lvl, request, "%s", msg); \
+		radlog_request_hex(L_DBG, lvl, request, data, len); \
+	} while (0)
+
 
 #ifdef __cplusplus
 }

@@ -1,23 +1,24 @@
 /*
- * dict.c	Routines to read the dictionary file.
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
  *
- * Version:	$Id$
- *
- *   This library is free software; you can redistribute it and/or
- *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
- *   version 2.1 of the License, or (at your option) any later version.
- *
- *   This library is distributed in the hope that it will be useful,
+ *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- *   Lesser General Public License for more details.
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
  *
- *   You should have received a copy of the GNU Lesser General Public
- *   License along with this library; if not, write to the Free Software
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
+/**
+ * @file lib/dict.c
+ * @brief Routines to read the dictionary file.
  *
- * Copyright 2000,2006  The FreeRADIUS server project
+ * @copyright 2000,2006 The FreeRADIUS server project
  */
 RCSID("$Id$")
 
@@ -75,7 +76,7 @@ struct fr_dict {
 	fr_hash_table_t		*values_by_name;	//!< Lookup an attribute enum value by name.
 
 	fr_dict_attr_t		*root;			//!< Root attribute of this dictionary.
-	TALLOC_CTX		*pool;			//!< Talloc memory pool to reduce mallocs.
+	TALLOC_CTX		*pool;			//!< Talloc memory pool to reduce allocs.
 };
 
 fr_dict_t *fr_dict_internal = NULL;	//!< Internal server dictionary.
@@ -83,83 +84,111 @@ fr_dict_t *fr_dict_internal = NULL;	//!< Internal server dictionary.
 /** Map data types to names representing those types
  */
 const FR_NAME_NUMBER dict_attr_types[] = {
-	{ "integer",       PW_TYPE_INTEGER },
-	{ "string",        PW_TYPE_STRING },
-	{ "ipaddr",        PW_TYPE_IPV4_ADDR },
-	{ "date",          PW_TYPE_DATE },
-	{ "abinary",       PW_TYPE_ABINARY },
-	{ "octets",        PW_TYPE_OCTETS },
-	{ "ifid",          PW_TYPE_IFID },
-	{ "ipv6addr",      PW_TYPE_IPV6_ADDR },
-	{ "ipv6prefix",    PW_TYPE_IPV6_PREFIX },
-	{ "byte",          PW_TYPE_BYTE },
-	{ "short",         PW_TYPE_SHORT },
-	{ "ether",         PW_TYPE_ETHERNET },
-	{ "combo-ip",      PW_TYPE_COMBO_IP_ADDR },
-	{ "tlv",           PW_TYPE_TLV },
-	{ "signed",        PW_TYPE_SIGNED },
-	{ "extended",      PW_TYPE_EXTENDED },
-	{ "long-extended", PW_TYPE_LONG_EXTENDED },
-	{ "evs",           PW_TYPE_EVS },
-	{ "uint8",         PW_TYPE_BYTE },
-	{ "uint16",        PW_TYPE_SHORT },
-	{ "uint32",        PW_TYPE_INTEGER },
-	{ "int32",         PW_TYPE_SIGNED },
-	{ "integer64",     PW_TYPE_INTEGER64 },
-	{ "uint64",        PW_TYPE_INTEGER64 },
-	{ "ipv4prefix",    PW_TYPE_IPV4_PREFIX },
-	{ "cidr",          PW_TYPE_IPV4_PREFIX },
-	{ "vsa",           PW_TYPE_VSA },
-	{ "vendor",        PW_TYPE_VENDOR },
-	{ NULL,            0 }
+	{ "string",		PW_TYPE_STRING },
+	{ "octets",		PW_TYPE_OCTETS },
+
+	{ "ipaddr",		PW_TYPE_IPV4_ADDR },
+	{ "ipv4prefix",		PW_TYPE_IPV4_PREFIX },
+	{ "ipv6addr",		PW_TYPE_IPV6_ADDR },
+	{ "ipv6prefix",		PW_TYPE_IPV6_PREFIX },
+	{ "ifid",		PW_TYPE_IFID },
+	{ "combo-ip",		PW_TYPE_COMBO_IP_ADDR },
+	{ "combo-prefix",	PW_TYPE_COMBO_IP_PREFIX },
+	{ "ether",		PW_TYPE_ETHERNET },
+
+	{ "bool",		PW_TYPE_BOOLEAN },
+	{ "byte",		PW_TYPE_BYTE },
+	{ "short",		PW_TYPE_SHORT },
+	{ "integer",		PW_TYPE_INTEGER },
+	{ "integer64",		PW_TYPE_INTEGER64 },
+	{ "signed",        	PW_TYPE_SIGNED },
+
+	{ "decimal",		PW_TYPE_DECIMAL },
+	{ "timeval",		PW_TYPE_TIMEVAL },
+	{ "date",		PW_TYPE_DATE },
+
+	{ "abinary",		PW_TYPE_ABINARY },
+
+	{ "tlv",		PW_TYPE_TLV },
+	{ "struct",        	PW_TYPE_STRUCT },
+
+	{ "extended",      	PW_TYPE_EXTENDED },
+	{ "long-extended", 	PW_TYPE_LONG_EXTENDED },
+
+	{ "vsa",          	PW_TYPE_VSA },
+	{ "evs",           	PW_TYPE_EVS },
+	{ "vendor",        	PW_TYPE_VENDOR },
+
+	/*
+	 *	Alternative names
+	 */
+	{ "cidr",         	PW_TYPE_IPV4_PREFIX },
+	{ "uint8",        	PW_TYPE_BYTE },
+	{ "uint16",        	PW_TYPE_SHORT },
+	{ "uint32",		PW_TYPE_INTEGER },
+	{ "uint64",		PW_TYPE_INTEGER64 },
+	{ "int32",         	PW_TYPE_SIGNED },
+
+	{ NULL,			0 }
 };
 
 /** Map data types to min / max data sizes
  */
-const size_t dict_attr_sizes[PW_TYPE_MAX][2] = {
-	[PW_TYPE_INVALID]	= {~0, 0},
+const size_t dict_attr_sizes[PW_TYPE_MAX + 1][2] = {
+	[PW_TYPE_INVALID]	= {~0, 0},	//!< Ensure array starts at 0.
+
 	[PW_TYPE_STRING]	= {0, ~0},
-	[PW_TYPE_INTEGER]	= {4, 4 },
-	[PW_TYPE_IPV4_ADDR]	= {4, 4},
-	[PW_TYPE_DATE]		= {4, 4},
-	[PW_TYPE_ABINARY]	= {32, ~0},
 	[PW_TYPE_OCTETS]	= {0, ~0},
-	[PW_TYPE_IFID]		= {8, 8},
+
+	[PW_TYPE_IPV4_ADDR]	= {4, 4},
+	[PW_TYPE_IPV4_PREFIX]	= {6, 6},
 	[PW_TYPE_IPV6_ADDR]	= {16, 16},
 	[PW_TYPE_IPV6_PREFIX]	= {2, 18},
+	[PW_TYPE_COMBO_IP_ADDR]	= {4, 16},
+	[PW_TYPE_IFID]		= {8, 8},
+	[PW_TYPE_ETHERNET]	= {6, 6},
+
+	[PW_TYPE_BOOLEAN]	= {1, 1},
 	[PW_TYPE_BYTE]		= {1, 1},
 	[PW_TYPE_SHORT]		= {2, 2},
-	[PW_TYPE_ETHERNET]	= {6, 6},
+	[PW_TYPE_INTEGER]	= {4, 4},
+	[PW_TYPE_INTEGER64]	= {8, 8},
 	[PW_TYPE_SIGNED]	= {4, 4},
-	[PW_TYPE_COMBO_IP_ADDR]	= {4, 16},
+
+	[PW_TYPE_DATE]		= {4, 4},
+	[PW_TYPE_ABINARY]	= {32, ~0},
+
 	[PW_TYPE_TLV]		= {2, ~0},
+	[PW_TYPE_STRUCT]	= {1, ~0},
+
 	[PW_TYPE_EXTENDED]	= {2, ~0},
 	[PW_TYPE_LONG_EXTENDED]	= {3, ~0},
-	[PW_TYPE_EVS]		= {6, ~0},
-	[PW_TYPE_INTEGER64]	= {8, 8},
-	[PW_TYPE_IPV4_PREFIX]	= {6, 6},
+
 	[PW_TYPE_VSA]		= {4, ~0},
-	[PW_TYPE_VENDOR]	= {0, 0}
+	[PW_TYPE_EVS]		= {6, ~0},
+
+	[PW_TYPE_MAX]		= {~0, 0}	//!< Ensure array covers all types.
 };
 
-const int fr_dict_attr_allowed_chars[256] = {
-/* 0x   0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f */
-/* 0 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* 1 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* 2 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
-/* 3 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-/* 4 */ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-/* 5 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1,
-/* 6 */ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-/* 7 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
-/* 8 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* 9 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* a */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* b */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* c */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* d */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* e */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+/** Characters allowed in dictionary names
+ *
+ */
+const bool fr_dict_attr_allowed_chars[UINT8_MAX] = {
+	['-'] = true, ['.'] = true, ['/'] = true, ['_'] = true,
+	['0'] = true, ['1'] = true, ['2'] = true, ['3'] = true, ['4'] = true,
+	['5'] = true, ['6'] = true, ['7'] = true, ['8'] = true, ['9'] = true,
+	['A'] = true, ['B'] = true, ['C'] = true, ['D'] = true, ['E'] = true,
+	['F'] = true, ['G'] = true, ['H'] = true, ['I'] = true, ['J'] = true,
+	['K'] = true, ['L'] = true, ['M'] = true, ['N'] = true, ['O'] = true,
+	['P'] = true, ['Q'] = true, ['R'] = true, ['S'] = true, ['T'] = true,
+	['U'] = true, ['V'] = true, ['W'] = true, ['X'] = true, ['Y'] = true,
+	['Z'] = true,
+	['a'] = true, ['b'] = true, ['c'] = true, ['d'] = true, ['e'] = true,
+	['f'] = true, ['g'] = true, ['h'] = true, ['i'] = true, ['j'] = true,
+	['k'] = true, ['l'] = true, ['m'] = true, ['n'] = true, ['o'] = true,
+	['p'] = true, ['q'] = true, ['r'] = true, ['s'] = true, ['t'] = true,
+	['u'] = true, ['v'] = true, ['w'] = true, ['x'] = true, ['y'] = true,
+	['z'] = true
 };
 
 /*
@@ -751,7 +780,7 @@ int fr_dict_attr_add(fr_dict_t *dict, fr_dict_attr_t const *parent,
 	 *	'octets[n]' can only be used in a few limited situations.
 	 */
 	if (flags.length) {
-		if (flags.array || flags.internal || flags.has_value || flags.virtual) {
+		if (flags.array || flags.has_value || flags.virtual) {
 			fr_strerror_printf("The 'octets[...]' syntax cannot be used any other flag");
 			goto error;
 		}
@@ -784,11 +813,13 @@ int fr_dict_attr_add(fr_dict_t *dict, fr_dict_attr_t const *parent,
 		for (v = parent; v != NULL; v = v->parent) {
 			if (v->type != PW_TYPE_VENDOR) continue;
 
+#ifdef WITH_DHCP
 			if ((v->attr != 34673) && /* freedhcp */
 			    (v->attr != DHCP_MAGIC_VENDOR)) {
 				fr_strerror_printf("The 'array' flag can only be used with DHCP options");
 				goto error;
 			}
+#endif
 			break;
 		}
 
@@ -1074,6 +1105,14 @@ int fr_dict_attr_add(fr_dict_t *dict, fr_dict_attr_t const *parent,
 		flags.length = 0;
 		break;
 
+		/*
+		 *	The length is calculated from th children, not
+		 *	input as the flags.
+		 */
+	case PW_TYPE_STRUCT:
+		flags.length = 0;
+		break;
+
 	case PW_TYPE_STRING:
 	case PW_TYPE_OCTETS:
 	case PW_TYPE_TLV:
@@ -1082,6 +1121,32 @@ int fr_dict_attr_add(fr_dict_t *dict, fr_dict_attr_t const *parent,
 
 	default:
 		break;
+	}
+
+	/*
+	 *	Validate attribute based on parent.
+	 */
+	if (parent->type == PW_TYPE_STRUCT) {
+		fr_dict_attr_t *mutable;
+
+		/*
+		 *	STRUCTs will have their length filled in later.
+		 */
+		if ((type != PW_TYPE_STRUCT) && (flags.length == 0)) {
+			fr_strerror_printf("Children of 'struct' type attributes MUST have fixed length.");
+			goto error;
+		}
+
+		if ((attr > 1) && !parent->flags.length) {
+			fr_strerror_printf("Children of 'struct' type attributes MUST start with sub-attribute 1.");
+			goto error;
+		}
+
+		/*
+		 *	Sneak in the length of the children.
+		 */
+		memcpy(&mutable, &parent, sizeof(mutable));
+		mutable->flags.length += flags.length;
 	}
 
 	/*
@@ -1454,34 +1519,39 @@ static int dict_read_process_attribute(fr_dict_t *dict, fr_dict_attr_t const *pa
 		block_vendor = vendor; /* Weird case where we're processing 26.<vid>.<tlv> */
 	}
 
-	if (strncmp(argv[2], "octets[", 7) != 0) {
-		/*
-		 *	find the type of the attribute.
-		 */
-		type = fr_str2int(dict_attr_types, argv[2], -1);
-		if (type < 0) {
-			fr_strerror_printf("Unknown data type '%s'", argv[2]);
+	/*
+	 *	Some types can have fixed length
+	 */
+	p = strchr(argv[2], '[');
+	if (p) *p = '\0';
+
+	/*
+	 *	find the type of the attribute.
+	 */
+	type = fr_str2int(dict_attr_types, argv[2], -1);
+	if (type < 0) {
+		fr_strerror_printf("Unknown data type '%s'", argv[2]);
+		return -1;
+	}
+
+	if (p) {
+		char *q;
+
+		q = strchr(p + 1, ']');
+		if (!q) {
+			fr_strerror_printf("Invalid format for '%s[...]'", argv[2]);
 			return -1;
 		}
 
-	} else {
-		type = PW_TYPE_OCTETS;
+		*q = 0;
 
-		p = strchr(argv[2] + 7, ']');
-		if (!p) {
-			fr_strerror_printf("Invalid format for 'octets'");
-			return -1;
-		}
-
-		*p = 0;
-
-		if (!dict_read_sscanf_i(argv[2] + 7, &length)) {
-			fr_strerror_printf("Invalid length for 'octets'");
+		if (!dict_read_sscanf_i(p + 1, &length)) {
+			fr_strerror_printf("Invalid length for '%s[...]'", argv[2]);
 			return -1;
 		}
 
 		if ((length == 0) || (length > 253)) {
-			fr_strerror_printf("Invalid length for 'octets'");
+			fr_strerror_printf("Invalid length for '%s[...]'", argv[2]);
 			return -1;
 		}
 
@@ -2151,6 +2221,10 @@ static int dict_read_init(fr_dict_t *dict, char const *dir_name, char const *fil
 	return 0;
 }
 
+
+static bool defined_cast_types = false;
+
+
 /** (re)initialize a protocol dictionary
  *
  * Initialize the directory, then fix the attr member of all attributes.
@@ -2194,8 +2268,6 @@ int fr_dict_init(TALLOC_CTX *ctx, fr_dict_t **out, char const *dir, char const *
 	/*
 	 *	Create the table of vendor by name.   There MAY NOT
 	 *	be multiple vendors of the same name.
-	 *
-	 *	Each vendor is malloc'd, so the free function is free.
 	 */
 	dict->vendors_by_name = fr_hash_table_create(dict, dict_vendor_name_hash, dict_vendor_name_cmp, hash_pool_free);
 	if (!dict->vendors_by_name) {
@@ -2215,8 +2287,6 @@ int fr_dict_init(TALLOC_CTX *ctx, fr_dict_t **out, char const *dir, char const *
 	/*
 	 *	Create the table of attributes by name.   There MAY NOT
 	 *	be multiple attributes of the same name.
-	 *
-	 *	Each attribute is malloc'd, so the free function is free.
 	 */
 	dict->attributes_by_name = fr_hash_table_create(dict, dict_attr_name_hash, dict_attr_name_cmp, hash_pool_free);
 	if (!dict->attributes_by_name) goto error;
@@ -2245,6 +2315,43 @@ int fr_dict_init(TALLOC_CTX *ctx, fr_dict_t **out, char const *dir, char const *
 	dict->root->flags.length = 1;
 
 	dict->enum_fixup = NULL;        /* just to be safe. */
+
+	/*
+	 *	Add cast attributes.  We do it this way,
+	 *	so cast attributes get added automatically for new types.
+	 *
+	 *	We manually add the attributes to the dictionary, and bypass
+	 *	fr_dict_attr_add(), because we know what we're doing, and
+	 *	that function does too many checks.
+	 */
+	if (!defined_cast_types) {
+		FR_NAME_NUMBER const	*p;
+		fr_dict_attr_flags_t	flags;
+		char			*type_name;
+
+		memset(&flags, 0, sizeof(flags));
+
+		flags.internal = 1;
+
+		for (p = dict_attr_types; p->name; p++) {
+			fr_dict_attr_t *n;
+
+			type_name = talloc_asprintf(dict->pool, "Tmp-Cast-%s", p->name);
+
+			n = fr_dict_attr_alloc(dict->pool, type_name, 0, PW_CAST_BASE + p->number, p->number, flags);
+			if (!n) goto error;
+
+			if (!fr_hash_table_insert(dict->attributes_by_name, n)) goto error;
+
+			/*
+			 *	Set up parenting for the attribute.
+			 */
+			if (fr_dict_attr_child_add(dict->root, n) < 0) goto error;
+
+			talloc_free(type_name);
+		}
+		defined_cast_types = true;
+	}
 
 	if (dict_read_init(dict, dir, fn, NULL, 0) < 0) goto error;
 
@@ -3208,6 +3315,10 @@ void fr_dict_print(fr_dict_attr_t const *da, int depth)
 		name = "LONG EXTENDED";
 		break;
 
+	case PW_TYPE_STRUCT:
+		name = "STRUCT";
+		break;
+
 	default:
 		name = "ATTRIBUTE";
 		break;
@@ -3389,13 +3500,24 @@ ssize_t fr_dict_attr_by_oid(fr_dict_t *dict, fr_dict_attr_t const **parent,
 		return slen;
 	}
 
+	switch ((*parent)->type) {
+	case PW_TYPE_STRUCTURAL:
+		break;
+
+	default:
+		fr_strerror_printf("Parent attribute %s is not TLV for child attribute starting at \"%s\"",
+				   (*parent)->name, oid);
+		return 0;	/* We parsed nothing */
+	}
+
 	/*
 	 *	If it's not a vendor type, it must be between 0..8*type_size
 	 *
 	 *	@fixme: find the TLV parent, and check it's size
 	 */
-	if (((*parent)->type != PW_TYPE_VENDOR) && (num > UINT8_MAX)) {
-		fr_strerror_printf("TLV attributes must be between 0-255 inclusive");
+	if (((*parent)->type != PW_TYPE_VENDOR) && !(*parent)->flags.is_root &&
+	    (num > UINT8_MAX)) {
+		fr_strerror_printf("TLV attributes must be between 0..255 inclusive");
 		return 0;
 	}
 
@@ -3414,6 +3536,7 @@ ssize_t fr_dict_attr_by_oid(fr_dict_t *dict, fr_dict_attr_t const **parent,
 			fr_strerror_printf("Unknown child attribute starting at \"%s\"", oid);
 			return 0;	/* We parsed nothing */
 		}
+
 		/*
 		 *	Record progress even if we error out.
 		 *

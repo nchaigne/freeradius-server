@@ -935,7 +935,7 @@ static indexed_modcallable *new_sublist(CONF_SECTION *cs,
  *	Load a sub-module list, as found inside an Auth-Type foo {}
  *	block
  */
-static int load_subcomponent_section(CONF_SECTION *cs,
+static bool load_subcomponent_section(CONF_SECTION *cs,
 				     rbtree_t *components,
 				     fr_dict_attr_t const *da, rlm_components_t comp)
 {
@@ -947,17 +947,7 @@ static int load_subcomponent_section(CONF_SECTION *cs,
 	/*
 	 *	Sanity check.
 	 */
-	if (!name2) {
-		return 1;
-	}
-
-	/*
-	 *	Compile the group.
-	 */
-	ml = modcall_compile_section(NULL, comp, cs);
-	if (!ml) {
-		return 0;
-	}
+	if (!name2) return false;
 
 	/*
 	 *	We must assign a numeric index to this subcomponent.
@@ -967,38 +957,34 @@ static int load_subcomponent_section(CONF_SECTION *cs,
 	 */
 	dval = fr_dict_enum_by_name(NULL, da, name2);
 	if (!dval) {
-		talloc_free(ml);
 		cf_log_err_cs(cs,
 			      "The %s attribute has no VALUE defined for %s",
 			      section_type_value[comp].typename, name2);
-		return 0;
+		return false;
 	}
+
+	/*
+	 *	Compile the group.
+	 */
+	ml = modcall_compile_section(NULL, comp, cs);
+	if (!ml) return false;
 
 	subcomp = new_sublist(cs, components, comp, dval->value);
 	if (!subcomp) {
 		talloc_free(ml);
-		return 1;
+		return false;
 	}
 
 	subcomp->modulelist = talloc_steal(subcomp, ml);
-	return 1;                /* OK */
+	return true;
 }
-
-/*
- *	Don't complain too often.
- */
-#define MAX_IGNORED (32)
-static int last_ignored = -1;
-static char const *ignored[MAX_IGNORED];
 
 static int load_component_section(CONF_SECTION *cs,
 				  rbtree_t *components, rlm_components_t comp)
 {
-	modcallable *this;
-	CONF_ITEM *modref;
-	int idx;
+	CONF_SECTION *subcs;
 	indexed_modcallable *subcomp;
-	char const *modname;
+	modcallable *ml;
 	fr_dict_attr_t const *da;
 
 	/*
@@ -1013,134 +999,38 @@ static int load_component_section(CONF_SECTION *cs,
 	}
 
 	/*
-	 *	Loop over the entries in the named section, loading
-	 *	the sections this time.
+	 *	Compile the Autz-Type, Auth-Type, etc. first.
+	 *
+	 *	The results will be cached, so that the next
+	 *	compilation will skip these sections.
 	 */
-	for (modref = cf_item_find_next(cs, NULL);
-	     modref != NULL;
-	     modref = cf_item_find_next(cs, modref)) {
-		char const *name1;
-		CONF_PAIR *cp = NULL;
-		CONF_SECTION *scs = NULL;
-
-		if (cf_item_is_section(modref)) {
-			scs = cf_item_to_section(modref);
-
-			name1 = cf_section_name1(scs);
-
-			if (strcmp(name1,
-				   section_type_value[comp].typename) == 0) {
-				if (!load_subcomponent_section(scs,
-							       components,
-							       da,
-							       comp)) {
-
-					return -1; /* FIXME: memleak? */
-				}
-				continue;
-			}
-
-			cp = NULL;
-
-		} else if (cf_item_is_pair(modref)) {
-			cp = cf_item_to_pair(modref);
-
-		} else {
-			continue; /* ignore it */
+	for (subcs = cf_subsection_find_next(cs, NULL, section_type_value[comp].typename);
+	     subcs != NULL;
+	     subcs = cf_subsection_find_next(cs, subcs, section_type_value[comp].typename)) {
+		if (!load_subcomponent_section(subcs, components, da, comp)) {
+			return -1; /* FIXME: memleak? */
 		}
-
-		/*
-		 *	Look for Auth-Type foo {}, which are special
-		 *	cases of named sections, and allowable ONLY
-		 *	at the top-level.
-		 *
-		 *	i.e. They're not allowed in a "group" or "redundant"
-		 *	subsection.
-		 */
-		if (comp == MOD_AUTHENTICATE) {
-			fr_dict_enum_t *dval;
-			char const *modrefname = NULL;
-			if (cp) {
-				modrefname = cf_pair_attr(cp);
-			} else {
-				modrefname = cf_section_name2(scs);
-				if (!modrefname) {
-					cf_log_err_cs(cs,
-						      "Errors parsing %s sub-section.\n",
-						      cf_section_name1(scs));
-					return -1;
-				}
-			}
-
-			dval = fr_dict_enum_by_name(NULL, fr_dict_attr_by_num(NULL, 0, PW_AUTH_TYPE), modrefname);
-			if (!dval) {
-				/*
-				 *	It's a section, but nothing we
-				 *	recognize.  Die!
-				 */
-				cf_log_err_cs(cs,
-					   "Unknown Auth-Type \"%s\" in %s sub-section.",
-					   modrefname, section_type_value[comp].section);
-				return -1;
-			}
-			idx = dval->value;
-		} else {
-			/* See the comment in new_sublist() for explanation
-			 * of the special index 0 */
-			idx = 0;
-		}
-
-		subcomp = new_sublist(cs, components, comp, idx);
-		if (!subcomp) continue;
-
-		/*
-		 *	Try to compile one entry.
-		 */
-		this = modcall_compile(subcomp, &subcomp->modulelist, comp, modref, &modname);
-
-		/*
-		 *	It's OK for the module to not exist.
-		 */
-		if (!this && modname && (modname[0] == '-')) {
-			int i;
-
-			if (last_ignored < 0) {
-				save_complain:
-				last_ignored++;
-				ignored[last_ignored] = modname;
-
-				complain:
-				WARN("Ignoring \"%s\" (see raddb/mods-available/README.rst)", modname + 1);
-				continue;
-			}
-
-			if (last_ignored >= MAX_IGNORED) goto complain;
-
-			for (i = 0; i <= last_ignored; i++) {
-				if (strcmp(ignored[i], modname) == 0) {
-					break;
-				}
-			}
-
-			if (i > last_ignored) goto save_complain;
-			continue;
-		}
-
-		if (!this) {
-			cf_log_err_cs(cs,
-				      "Errors parsing %s section.\n",
-				      cf_section_name1(cs));
-			return -1;
-		}
-
-		if (rad_debug_lvl > 2) modcall_debug(this, 2);
-
-		modcall_append(subcomp->modulelist, this);
 	}
+
+	/*
+	 *	Compile the section.
+	 */
+	ml = modcall_compile_section(NULL, comp, cs);
+	if (!ml) {
+		cf_log_err_cs(cs, "Errors parsing %s section.\n",
+			      cf_section_name1(cs));
+		return -1;
+	}
+
+	subcomp = new_sublist(cs, components, comp, 0);
+	if (!subcomp) {
+		talloc_free(ml);
+		return -1;
+	}
+	subcomp->modulelist = talloc_steal(subcomp, ml);
 
 	return 0;
 }
-
 
 static int _virtual_server_free(virtual_server_t *server)
 {
@@ -1257,6 +1147,32 @@ static int virtual_server_compile(CONF_SECTION *cs)
 			}
 #endif
 
+			subcs = cf_section_sub_find(cs, "arp");
+			if (subcs) {
+				cf_log_module(cs, "Loading arp {...}");
+				if (load_component_section(subcs, components,
+							   MOD_POST_AUTH) < 0) {
+					goto error;
+				}
+				c = lookup_by_index(components,
+						    MOD_POST_AUTH, 0);
+				if (c) server->mc[MOD_POST_AUTH] = c->modulelist;
+				break;
+			}
+
+			subcs = cf_section_sub_find(cs, "bfd");
+			if (subcs) {
+				cf_log_module(cs, "Loading bfd {...}");
+				if (load_component_section(subcs, components,
+							   MOD_AUTHORIZE) < 0) {
+					goto error;
+				}
+				c = lookup_by_index(components,
+						    MOD_AUTHORIZE, 0);
+				if (c) server->mc[MOD_AUTHORIZE] = c->modulelist;
+				break;
+			}
+
 #ifdef WITH_DHCP
 			/*
 			 *	It's OK to not have DHCP.
@@ -1348,6 +1264,7 @@ static bool define_type(CONF_SECTION *cs, fr_dict_attr_t const *da, char const *
 static bool virtual_server_define_types(CONF_SECTION *cs, rlm_components_t comp)
 {
 	fr_dict_attr_t const *da;
+	CONF_SECTION *subcs;
 	CONF_ITEM *ci;
 
 	/*
@@ -1362,44 +1279,44 @@ static bool virtual_server_define_types(CONF_SECTION *cs, rlm_components_t comp)
 	}
 
 	/*
-	 *	Define dynamic types, so that others can reference
-	 *	them.
+	 *	Compatibility hacks: "authenticate" sections can have
+	 *	bare words in them.  Fix those up to be sections.
 	 */
-	for (ci = cf_item_find_next(cs, NULL);
-	     ci != NULL;
-	     ci = cf_item_find_next(cs, ci)) {
-		char const *name1;
-		CONF_SECTION *subcs;
+	if (comp == MOD_AUTHENTICATE) {
+		for (ci = cf_item_find_next(cs, NULL);
+		     ci != NULL;
+		     ci = cf_item_find_next(cs, ci)) {
+			CONF_PAIR *cp;
 
-		/*
-		 *	Create types for simple references
-		 *	only when parsing the authenticate
-		 *	section.
-		 */
-		if ((section_type_value[comp].attr == PW_AUTH_TYPE) &&
-		    cf_item_is_pair(ci)) {
-			CONF_PAIR *cp = cf_item_to_pair(ci);
-			if (!define_type(cs, da, cf_pair_attr(cp))) {
-				return false;
-			}
+			if (!cf_item_is_pair(ci)) continue;
 
-			continue;
+			cp = cf_item_to_pair(ci);
+
+			subcs = cf_section_alloc(cs, section_type_value[comp].typename, cf_pair_attr(cp));
+			rad_assert(subcs != NULL);
+			cf_section_add(cs, subcs);
+			cf_pair_add(subcs, cf_pair_dup(subcs, cp));
+		}
+	}
+
+	/*
+	 *	Define the Autz-Type, etc. based on the subsections.
+	 */
+	for (subcs = cf_subsection_find_next(cs, NULL, section_type_value[comp].typename);
+	     subcs != NULL;
+	     subcs = cf_subsection_find_next(cs, subcs, section_type_value[comp].typename)) {
+		char const *name2;
+		CONF_SECTION *cs2;
+
+		name2 = cf_section_name2(subcs);
+		cs2 = cf_section_sub_find_name2(cs, section_type_value[comp].typename, name2);
+		if (cs2 != subcs) {
+			cf_log_err_cs(cs2, "Duplicate configuration section %s %s",
+				      section_type_value[comp].typename, name2);
+			return false;
 		}
 
-		if (!cf_item_is_section(ci)) continue;
-
-		subcs = cf_item_to_section(ci);
-		name1 = cf_section_name1(subcs);
-
-		/*
-		 *	Not Auth-Type, etc.
-		 */
-		if (strcmp(name1, section_type_value[comp].typename) != 0) continue;
-
-		/*
-		 *	And define it.
-		 */
-		if (!define_type(cs, da, cf_section_name2(subcs))) {
+		if (!define_type(cs, da, name2)) {
 			return false;
 		}
 	}
@@ -1491,6 +1408,7 @@ int virtual_servers_bootstrap(CONF_SECTION *config)
 			 *	Ignore clients and listeners for now.
 			 */
 			if (strcmp(name1, "clients") == 0) continue;
+			if (strcmp(name1, "client") == 0) continue;
 
 			if (strcmp(name1, "listen") == 0) {
 				if (listen_bootstrap(cs, subcs, server_name) < 0) return -1;
@@ -2146,7 +2064,7 @@ static rlm_rcode_t indexed_modcall(rlm_components_t comp, int idx, REQUEST *requ
 		request->module = NULL;
 		request->component = section_type_value[comp].section;
 
-		rcode = modcall(comp, list, request);
+		rcode = unlang_interpret(request, list, comp);
 
 		request->component = component;
 		request->module = module;

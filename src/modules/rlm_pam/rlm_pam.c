@@ -86,11 +86,8 @@ static int pam_conv(int num_msg, struct pam_message const **msg, struct pam_resp
 
 	request = pam_config->request;
 
-/* strdup(NULL) doesn't work on some platforms */
-#define COPY_STRING(s) ((s) ? strdup(s) : NULL)
-
-	reply = rad_malloc(num_msg * sizeof(struct pam_response));
-	memset(reply, 0, num_msg * sizeof(struct pam_response));
+#define COPY_STRING(s) ((s) ? talloc_strdup(reply, s) : NULL)
+	MEM(reply = talloc_zero_array(NULL, struct pam_response, num_msg));
 	for (count = 0; count < num_msg; count++) {
 		switch (msg[count]->msg_style) {
 		case PAM_PROMPT_ECHO_ON:
@@ -116,10 +113,9 @@ static int pam_conv(int num_msg, struct pam_message const **msg, struct pam_resp
 				if (reply[count].resp) {
 	  				/* could be a password, let's be sanitary */
 	  				memset(reply[count].resp, 0, strlen(reply[count].resp));
-	  				free(reply[count].resp);
 				}
 			}
-			free(reply);
+			talloc_free(reply);
 			pam_config->error = true;
 			return PAM_CONV_ERR;
 		}

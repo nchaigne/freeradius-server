@@ -15,7 +15,7 @@
  */
 
 /**
- * @file debug.c
+ * @file lib/debug.c
  * @brief Various functions to aid in debugging
  *
  * @copyright 2013  The FreeRADIUS server project
@@ -45,11 +45,11 @@
 
 #ifdef HAVE_SYS_PTRACE_H
 #  include <sys/ptrace.h>
-#  if !defined(PTRACE_ATTACH) && defined(PT_ATTACH)
-#    define PTRACE_ATTACH PT_ATTACH
+#  if !defined(PT_ATTACH) && defined(PTRACE_ATTACH)
+#    define PT_ATTACH PTRACE_ATTACH
 #  endif
-#  if !defined(PTRACE_DETACH) && defined(PT_DETACH)
-#    define PTRACE_DETACH PT_DETACH
+#  if !defined(PT_DETACH) && defined(PTRACE_DETACH)
+#    define PT_DETACH PTRACE_DETACH
 #  endif
 #endif
 
@@ -176,8 +176,8 @@ static int fr_get_debug_state(void)
 
 	/* Child */
 	if (pid == 0) {
-		int8_t ret = DEBUG_STATE_NOT_ATTACHED;
-		int ppid = getppid();
+		int8_t	ret = DEBUG_STATE_NOT_ATTACHED;
+		int	ppid = getppid();
 
 		/* Close parent's side */
 		close(from_child[0]);
@@ -190,7 +190,7 @@ static int fr_get_debug_state(void)
 		 *	If we don't do it in that order the read in the parent triggers
 		 *	a SIGKILL.
 		 */
-		if (_PTRACE(PTRACE_ATTACH, ppid) == 0) {
+		if (_PTRACE(PT_ATTACH, ppid) == 0) {
 			/* Wait for the parent to stop */
 			waitpid(ppid, NULL, 0);
 
@@ -200,7 +200,7 @@ static int fr_get_debug_state(void)
 			}
 
 			/* Detach */
-			_PTRACE(PTRACE_DETACH, ppid);
+			_PTRACE(PT_DETACH, ppid);
 			exit(0);
 		}
 
@@ -599,7 +599,7 @@ static int fr_fault_check_permissions(void)
 	 */
 	if ((q = strchr(panic_action, ' '))) {
 		/*
-		 *	need to use a static buffer, because mallocing memory in a signal handler
+		 *	need to use a static buffer, because allocing memory in a signal handler
 		 *	is a bad idea and can result in deadlock.
 		 */
 		len = snprintf(filename, sizeof(filename), "%.*s", (int)(q - panic_action), panic_action);
@@ -712,10 +712,10 @@ NEVER_RETURNS void fr_fault(int sig)
 	if (strlen(p) >= left) goto oob;
 	strlcpy(out, p, left);
 
-	FR_FAULT_LOG("Calling: %s", cmd);
-
 	{
 		bool disable = false;
+
+		FR_FAULT_LOG("Calling: %s", cmd);
 
 		/*
 		 *	Here we temporarily enable the dumpable flag so if GBD or LLDB
@@ -746,12 +746,24 @@ NEVER_RETURNS void fr_fault(int sig)
 				fr_exit_now(1);
 			}
 		}
+
+		FR_FAULT_LOG("Panic action exited with %i", code);
+
+		fr_exit_now(code);
 	}
 
-	FR_FAULT_LOG("Panic action exited with %i", code);
 
 finish:
-	fr_exit_now(1);
+	/*
+	 *	(Re-)Raise the signal, so that if we're running under
+	 *	a debugger, the debugger can break when it receives
+	 *	the signal.
+	 */
+	fr_unset_signal(sig);	/* Make sure we don't get into a loop */
+
+	raise(sig);
+
+	fr_exit_now(1);		/* Function marked as noreturn */
 }
 
 /** Callback executed on fatal talloc error
@@ -1050,9 +1062,9 @@ void fr_fault_set_cb(fr_fault_cb_t func)
 /** Log output to the fr_fault_log_fd
  *
  * We used to support a user defined callback, which was set to a radlog
- * function. Unfortunately, when logging to syslog, syslog would malloc memory
+ * function. Unfortunately, when logging to syslog, syslog would alloc memory
  * which would result in a deadlock if fr_fault was triggered from within
- * a malloc call.
+ * a allocation call.
  *
  * Now we just write directly to the FD.
  */
@@ -1118,7 +1130,7 @@ void NEVER_RETURNS _fr_exit(char const *file, int line, int status)
 	exit(status);
 }
 #else
-void NEVER_RETURNS _fr_exit(UNUSED char const *file, UNUSED int line, UNUSED int status)
+void NEVER_RETURNS _fr_exit(UNUSED char const *file, UNUSED int line, int status)
 {
 	fr_debug_break(false);	/* If running under GDB we'll break here */
 
@@ -1150,7 +1162,7 @@ void NEVER_RETURNS _fr_exit_now(char const *file, int line, int status)
 	_exit(status);
 }
 #else
-void NEVER_RETURNS _fr_exit_now(UNUSED char const *file, UNUSED int line, UNUSED int status)
+void NEVER_RETURNS _fr_exit_now(UNUSED char const *file, UNUSED int line, int status)
 {
 	fr_debug_break(false);	/* If running under GDB we'll break here */
 

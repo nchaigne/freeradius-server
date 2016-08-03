@@ -34,13 +34,8 @@ RCSID("$Id$")
  */
  #undef DEBUG
 #define DEBUG(fmt, ...)		if (fr_debug_lvl > 0) fr_printf_log(fmt "\n", ## __VA_ARGS__)
-#undef DEBUG2
-#define DEBUG2(fmt, ...)	if (fr_debug_lvl > 1) fr_printf_log(fmt "\n", ## __VA_ARGS__)
-
 
 #define ERROR(fmt, ...)		fr_perror("dhcpclient: " fmt, ## __VA_ARGS__)
-
-#ifdef WITH_DHCP
 
 #include <ctype.h>
 
@@ -67,7 +62,7 @@ static char *iface = NULL;
 static int iface_ind = -1;
 
 #ifdef HAVE_LINUX_IF_PACKET_H
-struct sockaddr_ll ll;	/* Socket address structure */
+static struct sockaddr_ll ll;	/* Socket address structure */
 #endif
 
 
@@ -365,8 +360,8 @@ static RADIUS_PACKET *fr_dhcp_recv_raw_loop(int lsockfd,
 				if (vp1 && vp2) {
 					nb_offer ++;
 					offer_list = talloc_realloc(request_p, offer_list, dc_offer_t, nb_offer);
-					offer_list[nb_offer-1].server_addr = vp1->vp_ipaddr;
-					offer_list[nb_offer-1].offered_addr = vp2->vp_ipaddr;
+					offer_list[nb_offer - 1].server_addr = vp1->vp_ipaddr;
+					offer_list[nb_offer - 1].offered_addr = vp2->vp_ipaddr;
 				}
 			}
 		}
@@ -785,5 +780,3 @@ int main(int argc, char **argv)
 
 	return ret < 0 ? 1 : 0;
 }
-
-#endif	/* WITH_DHCP */

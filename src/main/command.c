@@ -24,6 +24,7 @@
 #ifdef WITH_COMMAND_SOCKET
 
 #include <freeradius-devel/parser.h>
+#include <freeradius-devel/modcall.h>
 #include <freeradius-devel/md5.h>
 #include <freeradius-devel/channel.h>
 #include <freeradius-devel/state.h>
@@ -225,7 +226,7 @@ static int fr_server_domain_socket(char const *path, gid_t gid)
 	dir = dirname(buff);
 	if (dir != buff) {
 		dir = talloc_strdup(NULL, dir);
-		if (!dir) return -1;
+		MEM(dir);
 		talloc_free(buff);
 	}
 
@@ -234,8 +235,8 @@ static int fr_server_domain_socket(char const *path, gid_t gid)
 		fr_strerror_printf("Failed determining parent directory");
 	error:
 		talloc_free(dir);
-		close(dir_fd);
-		close(path_fd);
+		if (dir_fd >= 0) close(dir_fd);
+		if (path_fd >= 0) close(path_fd);
 		if (sock_fd >= 0) close(sock_fd);
 		if (parent_fd >= 0) close(parent_fd);
 		return -1;
@@ -255,6 +256,11 @@ static int fr_server_domain_socket(char const *path, gid_t gid)
 		struct passwd *user;
 		struct group *group;
 
+		if (errno != ENOENT) {
+			fr_strerror_printf("Can't open directory \"%s\": %s", dir, fr_syserror(errno));
+			goto error;
+		}
+
 		if (rad_getpwuid(NULL, &user, euid) < 0) {
 			fr_strerror_printf("Failed resolving euid to user: %s", fr_strerror());
 			goto error;
@@ -264,9 +270,10 @@ static int fr_server_domain_socket(char const *path, gid_t gid)
 			talloc_free(user);
 			goto error;
 		}
-		fr_strerror_printf("Can't open directory \"%s\": %s.  Must be created manually, or modified, "
-				   "with permissions that allow writing by user %s or group %s", dir,
-				   user->pw_name, group->gr_name, fr_syserror(errno));
+
+		fr_strerror_printf("Can't open directory \"%s\": Create it and allow writing by "
+				   "user %s or group %s", dir, user->pw_name, group->gr_name);
+
 		talloc_free(user);
 		talloc_free(group);
 		goto error;
@@ -374,9 +381,9 @@ static int fr_server_domain_socket(char const *path, gid_t gid)
 						   need_group->gr_name, have_group->gr_name);
 				talloc_free(need_group);
 				talloc_free(have_group);
-			}
 
-			goto error;
+				goto error;
+			}
 		}
 
 		if ((dir_perm & 0777) != (st.st_mode & 0777) &&
@@ -405,6 +412,7 @@ static int fr_server_domain_socket(char const *path, gid_t gid)
 			close(client_fd);
 			goto error;
 		}
+		fr_strerror();	/* Clear any errors */
 	}
 
 	name = strrchr(path, FR_DIR_SEP);
@@ -589,7 +597,7 @@ static int fr_server_domain_socket(char const *path, gid_t gid)
 	rad_suid_down();
 
 	close(dir_fd);
-	close(path_fd);
+	if (path_fd >= 0) close(path_fd);
 	close(parent_fd);
 
 	return sock_fd;
@@ -1393,6 +1401,8 @@ static int command_debug_condition(rad_listen_t *listener, int argc, char *argv[
 		return CMD_FAIL;
 	}
 
+	(void) modcall_pass2_condition(new_condition);
+
 	/*
 	 *	Delete old condition.
 	 *
@@ -1796,7 +1806,7 @@ static int null_socket_send(UNUSED rad_listen_t *listener, REQUEST *request)
 
 	output_file = request_data_reference(request, (void *)null_socket_send, 0);
 	if (!output_file) {
-		ERROR("No output file for injected packet %d", request->number);
+		ERROR("No output file for injected packet %" PRIu64 "", request->number);
 		return 0;
 	}
 
@@ -2016,7 +2026,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 #else
 		cprintf_error(listener, "This server was built without accounting support.\n");
 		fr_radius_free(&packet);
-		free(fake);
+		talloc_free(fake);
 		return 0;
 #endif
 	}
@@ -2042,7 +2052,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	if (!request_receive(NULL, fake, packet, sock->inject_client, fun)) {
 		cprintf_error(listener, "Failed to inject request.  See log file for details\n");
 		fr_radius_free(&packet);
-		free(fake);
+		talloc_free(fake);
 		return 0;
 	}
 
@@ -2309,7 +2319,7 @@ static int command_set_module_config(rad_listen_t *listener, int argc, char *arg
 		/*
 		 *	FIXME: Recurse into sub-types somehow...
 		 */
-		if (variables[i].type == PW_TYPE_SUBSECTION) continue;
+		if (PW_BASE_TYPE(variables[i].type) == PW_TYPE_SUBSECTION) continue;
 
 		if (strcmp(variables[i].name, argv[1]) == 0) {
 			rcode = i;
@@ -2753,7 +2763,7 @@ static int command_add_client_file(rad_listen_t *listener, int argc, char *argv[
 	/*
 	 *	Read the file and generate the client.
 	 */
-	c = client_read(argv[0], false, false);
+	c = client_read(argv[0], NULL, false);
 	if (!c) {
 		cprintf_error(listener, "Unknown error reading client file.\n");
 		return 0;
@@ -3201,8 +3211,8 @@ static int command_domain_recv_co(rad_listen_t *listener, fr_cs_buffer_t *co)
 	fr_command_table_t *table;
 	uint8_t *command;
 
-	r = fr_channel_drain(listener->fd, &channel, co->buffer, sizeof(co->buffer) - 1, &command, co->offset);
-	if ((r < 0) && (errno == EINTR)) return 0;
+	r = fr_channel_drain(listener->fd, &channel, co->buffer, sizeof(co->buffer) - 1, &command, &co->offset);
+	if ((r < 0) && ((errno == EINTR) || (errno == EAGAIN))) return 0;
 
 	if (r <= 0) {
 	do_close:
@@ -3214,7 +3224,6 @@ static int command_domain_recv_co(rad_listen_t *listener, fr_cs_buffer_t *co)
 	 *	We need more data.  Go read it.
 	 */
 	if (channel == FR_CHANNEL_WANT_MORE) {
-		co->offset = r;
 		return 0;
 	}
 
@@ -3315,6 +3324,11 @@ static int command_domain_recv_co(rad_listen_t *listener, fr_cs_buffer_t *co)
 	}
 
  do_next:
+	/*
+	 * Reset offset now that command has been fully read
+	 */
+	co->offset = 0;
+
 	r = fr_channel_write(listener->fd, FR_CHANNEL_CMD_STATUS, &status, sizeof(status));
 	if (r <= 0) goto do_close;
 
@@ -3339,8 +3353,8 @@ static int command_tcp_recv(rad_listen_t *this)
 		uint8_t *data;
 		uint8_t expected[16];
 
-		r = fr_channel_drain(this->fd, &channel, co->buffer, sizeof(co->buffer) - 1, &data, co->offset);
-		if ((r < 0) && (errno == EINTR)) return 0;
+		r = fr_channel_drain(this->fd, &channel, co->buffer, sizeof(co->buffer) - 1, &data, &co->offset);
+		if ((r < 0) && ((errno == EINTR) || (errno == EAGAIN))) return 0;
 
 		if (r <= 0) goto do_close;
 
@@ -3348,7 +3362,6 @@ static int command_tcp_recv(rad_listen_t *this)
 		 *	We need more data.  Go read it.
 		 */
 		if (channel == FR_CHANNEL_WANT_MORE) {
-			co->offset = r;
 			return 0;
 		}
 
@@ -3399,8 +3412,8 @@ static int command_magic_recv(rad_listen_t *this, fr_cs_buffer_t *co, bool chall
 	/*
 	 *	Start off by reading 4 bytes of magic, followed by 4 bytes of zero.
 	 */
-	r = fr_channel_drain(this->fd, &channel, co->buffer, sizeof(co->buffer) - 1, &data, co->offset);
-	if ((r < 0) && (errno == EINTR)) return 0;
+	r = fr_channel_drain(this->fd, &channel, co->buffer, sizeof(co->buffer) - 1, &data, &co->offset);
+	if ((r < 0) && ((errno == EINTR) || (errno == EAGAIN))) return 0;
 
 	if (r <= 0) {
 		ERROR("Failed reading magic: %s", fr_syserror(errno));
@@ -3414,7 +3427,6 @@ static int command_magic_recv(rad_listen_t *this, fr_cs_buffer_t *co, bool chall
 	 *	We need more data.  Go read it.
 	 */
 	if (channel == FR_CHANNEL_WANT_MORE) {
-		co->offset = r;
 		return 0;
 	}
 
@@ -3447,6 +3459,11 @@ static int command_magic_recv(rad_listen_t *this, fr_cs_buffer_t *co, bool chall
 		}
 
 	}
+
+	/*
+	 * Reset offset now that version has been fully read
+	 */
+	co->offset = 0;
 
 	return 1;
 }

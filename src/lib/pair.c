@@ -46,6 +46,27 @@ static int _fr_pair_free(NDEBUG_UNUSED VALUE_PAIR *vp)
 	return 0;
 }
 
+
+static VALUE_PAIR *fr_pair_alloc(TALLOC_CTX *ctx)
+{
+	VALUE_PAIR *vp;
+
+	vp = talloc_zero(ctx, VALUE_PAIR);
+	if (!vp) {
+		fr_strerror_printf("Out of memory");
+		return NULL;
+	}
+
+	vp->op = T_OP_EQ;
+	vp->tag = TAG_ANY;
+	vp->type = VT_NONE;
+
+	talloc_set_destructor(vp, _fr_pair_free);
+
+	return vp;
+}
+
+
 /** Dynamically allocate a new attribute
  *
  * Allocates a new attribute and a new dictionary attr if no DA is provided.
@@ -68,20 +89,18 @@ VALUE_PAIR *fr_pair_afrom_da(TALLOC_CTX *ctx, fr_dict_attr_t const *da)
 		return NULL;
 	}
 
-	vp = talloc_zero(ctx, VALUE_PAIR);
+
+	vp = fr_pair_alloc(ctx);
 	if (!vp) {
 		fr_strerror_printf("Out of memory");
 		return NULL;
 	}
 
+	/*
+	 *	Use the 'da' to initialize more fields.
+	 */
 	vp->da = da;
-	vp->op = T_OP_EQ;
-	vp->tag = TAG_ANY;
-	vp->type = VT_NONE;
-
 	vp->vp_length = da->flags.length;
-
-	talloc_set_destructor(vp, _fr_pair_free);
 
 	return vp;
 }
@@ -110,8 +129,22 @@ VALUE_PAIR *fr_pair_afrom_num(TALLOC_CTX *ctx, unsigned int vendor, unsigned int
 
 	da = fr_dict_attr_by_num(NULL, vendor, attr);
 	if (!da) {
+		VALUE_PAIR *vp;
+
+		vp = fr_pair_alloc(ctx);
+		if (!vp) return NULL;
+
+		/*
+		 *	Ensure that the DA is parented by the VP.
+		 */
 		da = fr_dict_unknown_afrom_fields(ctx, fr_dict_root(fr_dict_internal), vendor, attr);
-		if (!da) return NULL;
+		if (!da) {
+			talloc_free(vp);
+			return NULL;
+		}
+
+		vp->da = da;
+		return vp;
 	}
 
 	return fr_pair_afrom_da(ctx, da);
@@ -211,12 +244,66 @@ void fr_pair_steal(TALLOC_CTX *ctx, VALUE_PAIR *vp)
 	}
 }
 
-static VALUE_PAIR *fr_pair_from_unknown(TALLOC_CTX *ctx, VALUE_PAIR *vp, fr_dict_attr_t const *da)
-{
-	ssize_t len;
-	VALUE_PAIR *vp2 = NULL;
 
+/** Create a valuepair from an ASCII attribute and value
+ *
+ * Where the attribute name is in the form:
+ *  - Attr-%d
+ *  - Attr-%d.%d.%d...
+ *  - Vendor-%d-Attr-%d
+ *  - VendorName-Attr-%d
+ *
+ * @param ctx for talloc
+ * @param attribute name to parse.
+ * @param value to parse (must be a hex string).
+ * @param op to assign to new valuepair.
+ * @return new #VALUE_PAIR or NULL on error.
+ */
+static VALUE_PAIR *fr_pair_make_unknown(TALLOC_CTX *ctx,
+					char const *attribute, char const *value,
+					FR_TOKEN op)
+{
+	ssize_t		len;
+	VALUE_PAIR	*vp, *vp2;
+	fr_dict_attr_t const *da;
 	vp_cursor_t cursor;
+
+	vp = fr_pair_alloc(ctx);
+	if (!vp) return NULL;
+
+	vp->da = fr_dict_unknown_afrom_oid(ctx, NULL, fr_dict_root(fr_dict_internal), attribute);
+	if (!vp->da) {
+		talloc_free(vp);
+		return NULL;
+	}
+
+	/*
+	 *	No value.  Nothing more to do.
+	 */
+	if (!value) return vp;
+
+	/*
+	 *	Unknown attributes MUST be of type 'octets'
+	 */
+	if (strncasecmp(value, "0x", 2) != 0) {
+		fr_strerror_printf("Unknown attribute \"%s\" requires a hex "
+				   "string, not \"%s\"", attribute, value);
+		talloc_free(vp);
+		return NULL;
+	}
+
+	if (fr_pair_value_from_str(vp, value, -1) < 0) {
+		talloc_free(vp);
+		return NULL;
+	}
+
+	vp->op = (op == 0) ? T_OP_EQ : op;
+
+	/*
+	 *	Convert unknowns to knowns
+	 */
+	da = fr_dict_attr_by_num(NULL, vp->da->vendor, vp->da->attr);
+	if (!da) return vp;
 
 	/*
 	 *	Skip decoding if we know it's the wrong size for the
@@ -225,6 +312,7 @@ static VALUE_PAIR *fr_pair_from_unknown(TALLOC_CTX *ctx, VALUE_PAIR *vp, fr_dict
 	if ((vp->vp_length < dict_attr_sizes[da->type][0]) ||
 	    (vp->vp_length > dict_attr_sizes[da->type][1])) return vp;
 
+	vp2 = NULL;
 	fr_cursor_init(&cursor, &vp2);
 
 	len = fr_radius_decode_pair_value(ctx, &cursor, da, vp->vp_octets, vp->vp_length, vp->vp_length, NULL);
@@ -247,76 +335,8 @@ static VALUE_PAIR *fr_pair_from_unknown(TALLOC_CTX *ctx, VALUE_PAIR *vp, fr_dict
 		return vp;
 	}
 
-	fr_pair_steal(talloc_parent(vp), vp2);
 	fr_pair_list_free(&vp);
 	return vp2;
-}
-
-/** Create a valuepair from an ASCII attribute and value
- *
- * Where the attribute name is in the form:
- *  - Attr-%d
- *  - Attr-%d.%d.%d...
- *  - Vendor-%d-Attr-%d
- *  - VendorName-Attr-%d
- *
- * @param ctx for talloc
- * @param attribute name to parse.
- * @param value to parse (must be a hex string).
- * @param op to assign to new valuepair.
- * @return new #VALUE_PAIR or NULL on error.
- */
-static VALUE_PAIR *fr_pair_make_unknown(TALLOC_CTX *ctx,
-					char const *attribute, char const *value,
-					FR_TOKEN op)
-{
-	VALUE_PAIR	*vp;
-	fr_dict_attr_t const *da;
-
-	da = fr_dict_unknown_afrom_oid(ctx, NULL, fr_dict_root(fr_dict_internal), attribute);
-	if (!da) return NULL;
-
-	/*
-	 *	Unknown attributes MUST be of type 'octets'
-	 */
-	if (value && (strncasecmp(value, "0x", 2) != 0)) {
-		fr_strerror_printf("Unknown attribute \"%s\" requires a hex "
-				   "string, not \"%s\"", attribute, value);
-
-		fr_dict_unknown_free(&da);
-		return NULL;
-	}
-
-	/*
-	 *	We've now parsed the attribute properly, Let's create
-	 *	it.  This next stop also looks the attribute up in the
-	 *	dictionary, and creates the appropriate type for it.
-	 */
-	vp = fr_pair_afrom_da(ctx, da);
-	if (!vp) {
-		fr_dict_unknown_free(&da);
-		return NULL;
-	}
-
-	vp->op = (op == 0) ? T_OP_EQ : op;
-
-	if (!value) return vp;
-
-	if (fr_pair_value_from_str(vp, value, -1) < 0) {
-		fr_dict_unknown_free(&da);
-		talloc_free(vp);
-		return NULL;
-	}
-
-	/*
-	 *	Convert unknowns to knowns
-	 */
-	da = fr_dict_attr_by_num(NULL, vp->da->vendor, vp->da->attr);
-	if (da) {
-		return fr_pair_from_unknown(ctx, vp, da);
-	}
-
-	return vp;
 }
 
 /** Create a #VALUE_PAIR from ASCII strings
@@ -881,7 +901,7 @@ int fr_pair_cmp(VALUE_PAIR *a, VALUE_PAIR *b)
 
 			if (!fr_cond_assert(a->da->type == PW_TYPE_STRING)) return -1;
 
-			slen = regex_compile(NULL, &preg, a->vp_strvalue, a->vp_length, false, false, false, true);
+			slen = regex_compile(NULL, &preg, a->xlat, talloc_array_length(a->xlat) - 1, false, false, false, true);
 			if (slen <= 0) {
 				fr_strerror_printf("Error at offset %zu compiling regex for %s: %s",
 						   -slen, a->da->name, fr_strerror());
@@ -1953,7 +1973,7 @@ void fr_pair_value_memsteal(VALUE_PAIR *vp, uint8_t const *src)
 
 	vp->vp_octets = talloc_steal(vp, src);
 	vp->type = VT_DATA;
-	vp->vp_length = talloc_array_length(vp->vp_strvalue);
+	vp->vp_length = talloc_array_length(vp->vp_octets);
 	fr_pair_value_set_type(vp);
 
 	VERIFY_VP(vp);
@@ -2136,10 +2156,14 @@ char *fr_pair_value_asprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 {
 	VERIFY_VP(vp);
 
+	if (vp->type == VT_XLAT) {
+		return fr_asprint(ctx, vp->xlat, talloc_array_length(vp->xlat) - 1, quote);
+	}
+
 	return value_data_asprint(ctx, vp->da->type, vp->da, &vp->data, quote);
 }
 
-char *fr_pair_type_snprint(TALLOC_CTX *ctx, PW_TYPE type)
+char *fr_pair_type_asprint(TALLOC_CTX *ctx, PW_TYPE type)
 {
 	switch (type) {
 	case PW_TYPE_STRING :
@@ -2192,7 +2216,7 @@ char *fr_pair_type_snprint(TALLOC_CTX *ctx, PW_TYPE type)
  * to a string.
  *
  * @param out Where to write the string.
- * @param outlen Lenth of output buffer.
+ * @param outlen Length of output buffer.
  * @param vp to print.
  * @return
  *	- Length of data written to out.
@@ -2247,6 +2271,7 @@ void fr_pair_fprint(FILE *fp, VALUE_PAIR const *vp)
 	char	*p = buf;
 	size_t	len;
 
+	if (!fp) return;
 	VERIFY_VP(vp);
 
 	*p++ = '\t';
@@ -2645,20 +2670,33 @@ inline void fr_pair_verify(char const *file, int line, VALUE_PAIR const *vp)
  */
 void fr_pair_list_verify(char const *file, int line, TALLOC_CTX *expected, VALUE_PAIR *vps)
 {
-	vp_cursor_t cursor;
-	VALUE_PAIR *vp;
-	TALLOC_CTX *parent;
+	vp_cursor_t		slow_cursor, fast_cursor;
+	VALUE_PAIR		*slow, *fast;
+	TALLOC_CTX		*parent;
 
-	for (vp = fr_cursor_init(&cursor, &vps);
-	     vp;
-	     vp = fr_cursor_next(&cursor)) {
-		VERIFY_VP(vp);
+	fr_cursor_init(&fast_cursor, &vps);
 
-		parent = talloc_parent(vp);
+	for (slow = fr_cursor_init(&slow_cursor, &vps), fast = fr_cursor_init(&fast_cursor, &vps);
+	     slow && fast;
+	     slow = fr_cursor_next(&fast_cursor), fast = fr_cursor_next(&fast_cursor)) {
+		VERIFY_VP(slow);
+
+		/*
+		 *	Advances twice as fast as slow...
+		 */
+		fast = fr_cursor_next(&fast_cursor);
+		if (fast == slow) {
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: Looping list found.  "
+						 "Fast pointer hit slow pointer at \"%s\"",
+						 file, line, slow->da->name);
+			if (!fr_cond_assert(0)) fr_exit_now(1);
+		}
+
+		parent = talloc_parent(slow);
 		if (expected && (parent != expected)) {
 			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: Expected VALUE_PAIR \"%s\" to be parented "
 				     "by %p (%s), instead parented by %p (%s)\n",
-				     file, line, vp->da->name,
+				     file, line, slow->da->name,
 				     expected, talloc_get_name(expected),
 				     parent, parent ? talloc_get_name(parent) : "NULL");
 
@@ -2666,7 +2704,6 @@ void fr_pair_list_verify(char const *file, int line, TALLOC_CTX *expected, VALUE
 			if (parent) fr_log_talloc_report(parent);
 			if (!fr_cond_assert(0)) fr_exit_now(1);
 		}
-
 	}
 }
 #endif

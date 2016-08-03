@@ -1,12 +1,32 @@
 /*
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
+/**
+ * @file lib/getaddrinfo.c
+ * @brief Replacement getaddrinfo functions.
+ *
  * These functions are defined and used only if the configure
  * cannot detect the standard getaddrinfo(), freeaddrinfo(),
  * gai_strerror() and getnameinfo(). This avoids sprinkling of ifdefs.
  *
  * FIXME: getaddrinfo() & getnameinfo() should
  *	return all IPv4 addresses provided by DNS lookup.
+ *
+ * @copyright 2016  The FreeRADIUS server project
  */
-
 RCSID("$Id$")
 
 #include <freeradius-devel/libradius.h>
@@ -191,14 +211,12 @@ static struct hostent *gethostbyaddr_r(char const *addr, int len, int type, stru
  */
 
 #ifndef HAVE_GETADDRINFO
-static struct addrinfo *malloc_ai(uint16_t port, u_long addr, int socktype, int proto)
+static struct addrinfo *alloc_ai(uint16_t port, u_long addr, int socktype, int proto)
 {
 	struct addrinfo *ai;
 
-	ai = (struct addrinfo *)malloc(sizeof(struct addrinfo) + sizeof(struct sockaddr_in));
-	if (!ai) return NULL;
-
-	memset(ai, 0, sizeof(struct addrinfo) + sizeof(struct sockaddr_in));
+	MEM(ai = (struct addrinfo *)talloc_zero_array(NULL, uint8_t,
+						      sizeof(struct addrinfo) + sizeof(struct sockaddr_in)));
 	ai->ai_addr = (struct sockaddr *)(ai + 1);
 	ai->ai_addrlen = sizeof(struct sockaddr_in);
 #  ifdef HAVE_SOCKADDR_SA_LEN
@@ -237,11 +255,9 @@ void freeaddrinfo(struct addrinfo *ai)
 {
 	struct addrinfo *next;
 
-	if (ai->ai_canonname) free(ai->ai_canonname);
-
 	do {
 		next = ai->ai_next;
-		free(ai);
+		talloc_free(ai);
 	} while ((ai = next) != NULL);
 }
 
@@ -303,9 +319,9 @@ int getaddrinfo(char const *hostname, char const *servname, struct addrinfo cons
 
 	if (!hostname) {
 		if (hints && hints->ai_flags & AI_PASSIVE) {
-			*res = malloc_ai(port, htonl(0x00000000), socktype, proto);
+			*res = alloc_ai(port, htonl(0x00000000), socktype, proto);
 		} else {
-			*res = malloc_ai(port, htonl(0x7f000001), socktype, proto);
+			*res = alloc_ai(port, htonl(0x7f000001), socktype, proto);
 		}
 		if (!*res) return EAI_MEMORY;
 
@@ -314,7 +330,7 @@ int getaddrinfo(char const *hostname, char const *servname, struct addrinfo cons
 
 	/* Numeric IP Address */
 	if (inet_aton(hostname, &in)) {
-		*res = malloc_ai(port, in.s_addr, socktype, proto);
+		*res = alloc_ai(port, in.s_addr, socktype, proto);
 		if (!*res) return EAI_MEMORY;
 
 		return 0;
@@ -337,8 +353,8 @@ int getaddrinfo(char const *hostname, char const *servname, struct addrinfo cons
 
 	if (hp && hp->h_name && hp->h_name[0] && hp->h_addr_list[0]) {
 		for (i = 0; hp->h_addr_list[i]; i++) {
-			if ((cur = malloc_ai(port, ((struct in_addr *)hp->h_addr_list[i])->s_addr,
-					     socktype, proto)) == NULL) {
+			if ((cur = alloc_ai(port, ((struct in_addr *)hp->h_addr_list[i])->s_addr,
+					    socktype, proto)) == NULL) {
 				if (*res) freeaddrinfo(*res);
 				return EAI_MEMORY;
 			}
@@ -352,7 +368,7 @@ int getaddrinfo(char const *hostname, char const *servname, struct addrinfo cons
 		}
 
 		if (hints && hints->ai_flags & AI_CANONNAME && *res) {
-			if (((*res)->ai_canonname = strdup(hp->h_name)) == NULL) {
+			if (((*res)->ai_canonname = talloc_strdup(*res, hp->h_name)) == NULL) {
 				freeaddrinfo(*res);
 				return EAI_MEMORY;
 			}

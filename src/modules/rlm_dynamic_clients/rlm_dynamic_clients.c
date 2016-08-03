@@ -31,13 +31,13 @@ RCSID("$Id$")
 /*
  *	Find the client definition.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance,
-				 REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
 	size_t length;
 	char const *value;
 	CONF_PAIR *cp;
 	RADCLIENT *c;
+	CONF_SECTION *server_cs;
 	char buffer[2048];
 
 	/*
@@ -74,13 +74,19 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance,
 	}
 
 	memcpy(buffer, value, length + 1);
-	fr_inet_ntoh(&request->packet->src_ipaddr,
-		buffer + length, sizeof(buffer) - length - 1);
+	fr_inet_ntoh(&request->packet->src_ipaddr, buffer + length, sizeof(buffer) - length - 1);
 
 	/*
 	 *	Read the buffer and generate the client.
 	 */
-	c = client_read(buffer, (request->client->server != NULL), true);
+	if (request->client->server) {
+		server_cs = request->client->server_cs;
+
+	} else {
+		server_cs = request->listener->server_cs;
+	}
+
+	c = client_read(buffer, server_cs, true);
 	if (!c) return RLM_MODULE_FAIL;
 
 	/*

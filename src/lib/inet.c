@@ -130,7 +130,7 @@ int fr_inet_hton(fr_ipaddr_t *out, int af, char const *hostname, bool fallback)
 	struct addrinfo hints, *ai = NULL, *alt = NULL, *res = NULL;
 
 	/*
-	 *	Avoid malloc for IP addresses.  This helps us debug
+	 *	Avoid alloc for IP addresses.  This helps us debug
 	 *	memory errors when using talloc.
 	 */
 #ifdef TALLOC_DEBUG
@@ -732,8 +732,9 @@ char *fr_inet_ntop(char out[FR_IPADDR_STRLEN], size_t outlen, fr_ipaddr_t *addr)
 						   (p - out) + len, outlen);
 				return NULL;
 			}
+			return out;
 		}
-		return out;
+
 	}
 #endif
 

@@ -2,7 +2,8 @@ language: c
 compiler:
   - clang
   - gcc
-sudo: false
+sudo: true
+dist: trusty
 env:
   global:
     - LDAP_TEST_SERVER="127.0.0.1"
@@ -24,9 +25,10 @@ addons:
       version: master
       description: The FreeRADIUS server project
     notification_email: freeradius-devel@lists.freeradius.org
-    build_command_prepend: ./configure
+    build_command_prepend: ./configure -with-rlm-python-bin=/usr/bin/python2.7
     build_command: make
     branch_pattern: coverity_scan
+  postgresql: "9.4"
   apt:
     sources:
       - couchbase-precise
@@ -38,9 +40,12 @@ addons:
       - dh-make
       - doxygen
       - fakeroot
+      - gcc-4.9
+      - gccgo-4.9
       - gdb
       - graphviz
       - lintian
+      - mysql-server
       - pbuilder
       - python-dev
       - quilt
@@ -70,6 +75,7 @@ addons:
       - libpcre3-dev
       - libperl-dev
       - libpq-dev
+      - libpython-all-dev
       - libreadline-dev
       - libsnmp-dev
       - libssl-dev
@@ -81,8 +87,12 @@ addons:
       - libyubikey-dev
       - slapd
       - ldap-utils
-  postgresql: "9.4"
+services:
+  - mysql
+  - postgresql
 before_install:
+  - if [ "${CC}" == 'gcc' ]; then sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4.9 60; fi
+  - if [ "${CC}" == 'gcc' ]; then sudo update-alternatives --config gcc; fi
   - $CC --version
 before_script:
   - ./scripts/travis/build.sh

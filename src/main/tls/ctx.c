@@ -30,6 +30,9 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #ifdef WITH_TLS
 #define LOG_PREFIX "tls - "
 
+#include <openssl/rand.h>
+#include <openssl/dh.h>
+
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/rad_assert.h>
 
@@ -250,6 +253,25 @@ SSL_CTX *tls_ctx_alloc(fr_tls_conf_t const *conf, bool client)
 		return NULL;
 	}
 
+	if (conf->private_key_file) {
+		if (!(SSL_CTX_use_PrivateKey_file(ctx, conf->private_key_file, type))) {
+			tls_log_error(NULL, "Failed reading private key file \"%s\"",
+				      conf->private_key_file);
+			return NULL;
+		}
+	}
+
+	/*
+	 *	Check if the loaded private key is the right one
+	 *
+	 *	Note: The call to SSL_CTX_use_certificate_chain_file
+	 *	can load in a private key too.
+	 */
+	if (!SSL_CTX_check_private_key(ctx)) {
+		ERROR("Private key does not match the certificate public key");
+		return NULL;
+	}
+
 	/* Load the CAs we trust */
 load_ca:
 	if (conf->ca_file || conf->ca_path) {
@@ -260,22 +282,6 @@ load_ca:
 		}
 	}
 	if (conf->ca_file && *conf->ca_file) SSL_CTX_set_client_CA_list(ctx, SSL_load_client_CA_file(conf->ca_file));
-
-	if (conf->private_key_file) {
-		if (!(SSL_CTX_use_PrivateKey_file(ctx, conf->private_key_file, type))) {
-			tls_log_error(NULL, "Failed reading private key file \"%s\"",
-				      conf->private_key_file);
-			return NULL;
-		}
-
-		/*
-		 * Check if the loaded private key is the right one
-		 */
-		if (!SSL_CTX_check_private_key(ctx)) {
-			ERROR("Private key does not match the certificate public key");
-			return NULL;
-		}
-	}
 
 #ifdef PSK_MAX_IDENTITY_LEN
 post_ca:
@@ -326,6 +332,15 @@ post_ca:
 		 */
 		ctx_options |= SSL_OP_SINGLE_DH_USE;
 	}
+
+#ifdef SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS
+	if (conf->allow_renegotiation) {
+		/*
+		 *	Note: This flag isn't honoured by all OpenSSL forks.
+		 */
+		ctx_options |= SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS;
+	}
+#endif
 
 	/*
 	 *	SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS to work around issues
@@ -402,7 +417,25 @@ post_ca:
 		SSL_CTX_set_verify_depth(ctx, conf->verify_depth);
 	}
 
-	/* Load randomness */
+	/*
+	 *	Configure OCSP stapling for the server cert
+	 */
+	if (conf->staple.enable) {
+		SSL_CTX_set_tlsext_status_cb(ctx, tls_ocsp_staple_cb);
+
+		{
+			fr_tls_ocsp_conf_t const *staple_conf = &(conf->staple);	/* Need to assign offset first */
+			fr_tls_ocsp_conf_t *tmp;
+
+			memcpy(&tmp, &staple_conf, sizeof(tmp));
+
+			SSL_CTX_set_tlsext_status_arg(ctx, tmp);
+		}
+	}
+
+	/*
+	 *	Load randomness
+	 */
 	if (conf->random_file) {
 		if (!(RAND_load_file(conf->random_file, 1024 * 10))) {
 			tls_log_error(NULL, "Failed loading randomness");
@@ -411,7 +444,7 @@ post_ca:
 	}
 
 	/*
-	 * Set the cipher list if we were told to
+	 *	Set the cipher list if we were told to
 	 */
 	if (conf->cipher_list) {
 		if (!SSL_CTX_set_cipher_list(ctx, conf->cipher_list)) {

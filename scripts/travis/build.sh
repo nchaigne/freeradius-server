@@ -22,7 +22,11 @@ CFLAGS="${BUILD_CFLAGS}" ./configure -C \
     --with-threads=$LIBS_OPTIONAL \
     --with-udpfromto=$LIBS_OPTIONAL \
     --with-openssl=$LIBS_OPTIONAL \
-    --with-pcre=$LIBS_OPTIONAL
+    --with-pcre=$LIBS_OPTIONAL \
+    --with-rlm-python-bin=/usr/bin/python2.7   # Otherwise travis picks up /opt/python, which doesn't have .so available
+
+echo "Contents of src/include/autoconf.h"
+cat "./src/include/autoconf.h"
 
 #
 #  Build the server
@@ -36,7 +40,8 @@ make -j8
 #
 if [ "${COVERITY_SCAN_BRANCH}" != 1 -a "${CC}" = 'clang' ]; then
     echo "Starting clang scan"
-    make -j8 scan && [ "$(find build/plist/ -name *.html)" = '' ];
+    # Travis only has two cores
+    make -j2 scan && [ "$(find build/plist/ -name *.html)" = '' ];
 fi
 
 #

@@ -75,7 +75,7 @@ typedef struct listen_config_t {
 	CONF_SECTION	*server;	//!< encapsulating server configuratiuon
 	CONF_SECTION	*cs;		//!< configuration for this listener
 	char const	*server_name;	//!< name of the virtual server (if any)
-	void	*handle;	//!< to dynamically loaded library (if any)
+	void		*handle;	//!< to dynamically loaded library (if any)
 	RAD_LISTEN_TYPE	type;		//! same as Listen-Socket-Type
 	fr_protocol_t	*proto;		//!< pointer to the protocol handler.
 
@@ -571,6 +571,7 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 	}
 
 	request->server = client->server;
+
 	trigger_exec(request, NULL, "server.client.add", false, NULL);
 
 	talloc_free(request);
@@ -941,8 +942,10 @@ static int dual_tcp_accept(rad_listen_t *listener)
 	sock = this->data;
 	memcpy(this->data, listener->data, sizeof(*sock));
 	memcpy(this, listener, sizeof(*this));
+
 	this->next = NULL;
 	this->data = sock;	/* fix it back */
+
 	sock->parent = listener->data;
 	sock->other_ipaddr = src_ipaddr;
 	sock->other_port = src_port;
@@ -1271,7 +1274,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	fr_ipaddr_t	ipaddr;
 	listen_socket_t *sock = this->data;
 	char const	*section_name = NULL;
-	CONF_SECTION	*client_cs, *parentcs;
+	CONF_SECTION	*clients_cs, *parent_cs;
 	CONF_SECTION	*subcs;
 	CONF_PAIR	*cp;
 
@@ -1503,19 +1506,19 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	 *	The more specific configurations are preferred to more
 	 *	generic ones.
 	 */
-	client_cs = NULL;
-	parentcs = cf_top_section(cs);
+	clients_cs = NULL;
+	parent_cs = cf_top_section(cs);
 	rcode = cf_pair_parse(cs, "clients", FR_ITEM_POINTER(PW_TYPE_STRING, &section_name), NULL, T_INVALID);
 	if (rcode < 0) return -1; /* bad string */
 	if (rcode == 0) {
 		/*
 		 *	Explicit list given: use it.
 		 */
-		client_cs = cf_section_sub_find_name2(parentcs, "clients", section_name);
-		if (!client_cs) {
-			client_cs = cf_section_sub_find(main_config.config, section_name);
+		clients_cs = cf_section_sub_find_name2(parent_cs, "clients", section_name);
+		if (!clients_cs) {
+			clients_cs = cf_section_sub_find(main_config.config, section_name);
 		}
-		if (!client_cs) {
+		if (!clients_cs) {
 			cf_log_err_cs(cs,
 				   "Failed to find clients %s {...}",
 				   section_name);
@@ -1523,31 +1526,34 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 		}
 	} /* else there was no "clients = " entry. */
 
-	if (!client_cs) {
-		CONF_SECTION *server_cs;
-
-		server_cs = cf_section_sub_find_name2(parentcs,
-						      "server",
-						      this->server);
-		/*
-		 *	Found a "server foo" section.  If there are clients
-		 *	in it, use them.
-		 */
-		if (server_cs &&
-		    (cf_section_sub_find(server_cs, "client") != NULL)) {
-			client_cs = server_cs;
-		}
+	/*
+	 *	Always cache the CONF_SECTION of the server.
+	 */
+	this->server_cs = cf_section_sub_find_name2(parent_cs,
+						    "server",
+						    this->server);
+	if (!this->server_cs) {
+		cf_log_err_cs(cs, "Failed to find virtual server '%s'", this->server);
+		return -1;
 	}
 
 	/*
-	 *	Still nothing.  Look for global clients.
+	 *	Prefer clients who are also located in this virtual server.
+	 *
+	 *	If there are no clients in this virtual server, then
+	 *	choose the global list of clients.
 	 */
-	if (!client_cs) client_cs = parentcs;
+	if (!clients_cs &&
+	    (cf_section_sub_find(this->server_cs, "client") != NULL)) {
+		clients_cs = this->server_cs;
+	} else {
+		clients_cs = parent_cs;
+	}
 
 #ifdef WITH_TLS
-	sock->clients = client_list_parse_section(client_cs, (this->tls != NULL));
+	sock->clients = client_list_parse_section(clients_cs, (this->tls != NULL));
 #else
-	sock->clients = client_list_parse_section(client_cs, false);
+	sock->clients = client_list_parse_section(clients_cs, false);
 #endif
 	if (!sock->clients) {
 		cf_log_err_cs(cs,
@@ -3203,6 +3209,11 @@ int listen_init(rad_listen_t **head,
 
 	for (lc = listen_config; lc != NULL; lc = lc->next) {
 		if (lc->proto->open(lc->cs, lc->listener) < 0) {
+			if (lc->server_name) {
+				ERROR("Failed creating listener for server \"%s\"", lc->server_name);
+			} else {
+				ERROR("Failed creating global listener for type %i", lc->type);	/* Fixme to print str */
+			}
 			TALLOC_FREE(listen_ctx);
 			return -1;
 		}

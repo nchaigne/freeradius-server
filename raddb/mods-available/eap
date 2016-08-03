@@ -397,6 +397,45 @@ eap {
 			#
 #			lifetime = 86400
 
+			#
+			#  Revalidate client's certificate chain each time a session
+			#  is resumed.
+			#
+			#  Intermediaries provided by the client are not cached,
+			#  or copied to the server's certificate store, so
+			#  rebuilding the certificate chain will fail if we don't
+			#  have the intermediaries loaded from ca_file or ca_path.
+			#
+			#  This is useful with long cache lifetimes, where a
+			#  certificate may be revoked in the interim between the
+			#  session being created and re-used.
+			#
+#			verify = no
+
+			#
+			#  Only allow session resumption if an extended master
+			#  secret has been created.  This requires client support.
+			#
+			#  Extended Master Secrets (RFC 7627) are required to
+			#  prevent a MITM attack, where the attacker can resume
+			#  a session if it can insert itself into the path between
+			#  the TLS client and TLS server.
+			#
+			#    https://mitls.org/pages/attacks/3SHAKE
+			#
+			#  Note: This attack is undetectable by the client.
+			#  Note: Only supported with OpenSSL >= 1.1.0
+			#
+#			require_extended_master_secret = yes
+
+			#
+			#  Only allow session resumption if a cipher which would
+			#  allow perfect forward secrecy has been selected.
+			#
+			#  Note: Only enforced with OpenSSL >= 1.1.0
+			#
+#			require_perfect_forward_secrecy = no
+
 			#  As of 3.1 OpenSSL's internal cache has been disabled due to
 			#  scoping/threading issues.
 			#
@@ -548,6 +587,82 @@ eap {
 			#
 #			softfail = no
 		}
+
+
+		#
+		#  Configures OCSP stapling for server certificates.
+		#
+		#  If requested, we query either the server listed below (as url),
+		#  or the one specified in our server certificate, to retrieve an
+		#  OCSP response to pass back to the TLS client.
+		#
+		#  This allows TLS clients to check for certificate revocation before
+		#  divulging credentials to a (possibly rogue) server, that may be
+		#  presenting a compromised certificate.
+		#
+		staple {
+			#
+			#  Enable it.  The default is "no". Deleting the entire
+			#  "ocsp" subsection also disables ocsp checking
+			#
+#			enable = no
+
+			#
+			#  OCSP checks are performed whenever a TLS client includes
+			#  an OCSP stapling extension.
+			#
+			#  In order to retrieve cached OCSP staples, a virtual
+			#  server must be defined here.
+			#
+			#  The same virtual server can be used for caching
+			#  client OCSP response states, and stapling information.
+			#
+			#  See raddb/sites-available/tls-cache for details.
+			#
+#			virtual_server = 'tls-cache'
+
+			#
+			#  The OCSP Responder URL can be automatically extracted
+			#  from the certificate in question. To override the
+			#  OCSP Responder URL set "override_cert_url = yes".
+			#
+			override_cert_url = yes
+
+			#
+			#  If the OCSP Responder address is not extracted from
+			#  the certificate, the URL can be defined here.
+			#
+			url = "http://127.0.0.1/ocsp/"
+
+			#
+			#  If the OCSP Responder can not cope with nonce in the
+			#  request, then it can be disabled here.
+			#
+			#  For security reasons, disabling this option is not
+			#  recommended as nonce protects against replay attacks.
+			#
+			#  Note that Microsoft AD Certificate Services OCSP
+			#  Responder does not enable nonce by default. It is more
+			#  secure to enable nonce on the responder than to
+			#  disable it in the query here. See
+			#  http://technet.microsoft.com/en-us/library/cc770413%28WS.10%29.aspx
+			#
+#			use_nonce = yes
+
+			#
+			#  Number of seconds before giving up waiting for OCSP
+			#  response. 0 uses system default.
+			#
+#			timeout = 0
+
+			#
+			#  Normally if we can't query the OCSP Responder
+			#  we issue a fatal alert, and abort.  Set this to true
+			#  to allow the session to continue without an OCSP
+			#  stapling response being sent to the TLS client.
+			#
+#			softfail = no
+		}
 	}
 
 	## EAP-TLS
@@ -626,32 +741,33 @@ eap {
 		tls = tls-common
 
 		#
-		#  The tunneled authentication request does not usually contain
-		#  useful attributes like 'Calling-Station-Id', etc.  These
-		#  attributes are outside of the tunnel, and normally
-		#  unavailable to the tunneled authentication request.
+		#  copy_request_to_tunnel has been removed in 3.2.0
 		#
-		#  By setting this configuration entry to 'yes', any attribute
-		#  which is NOT in the tunneled authentication request, but
-		#  which IS available outside of the tunnel, is copied to the
-		#  tunneled request.
+		#  Attributes from the outer request may be accessed with:
 		#
-		#  allowed values: {no, yes}
+		#	&outer:request:<attribute>
 		#
-		copy_request_to_tunnel = no
+		#  The old behaviour may be emulated by adding the following
+		#  to the top of the authorize section of the inner tunnel.
+		#
+		#	update {
+		#		&request: += &reply:[*]
+		#	}
+		#
 
-		#
-		#  As of version 3.0.5, this configuration item
-		#  is deprecated.  Instead, you should use copy any required
-		#  authorizational attributes to outer.session-state.
+		#  
+		#  use_tunneled_reply has been removed in 3.2.0	
+		# 
+		#  Attributes that should be provided in the reply should
+		#  be copied to the outer.session-state list.
 		#
 		# 	update outer.session-state {
 		#		...
 		#
 		#	}
 		#
-		#  In the post-auth section of the outer server, attributes can
-		#  then be copied to the reply list.
+		#  In the post-auth section of the outer server, these attributes
+		#  can then be copied to the reply list.
 		#
 		#  If you want to copy the entire session-state list to the reply
 		#  the following statement may be used:
@@ -660,16 +776,6 @@ eap {
 		#		&reply: += &session-state:[*]
 		#	}
 		#
-		#  The reply attributes sent to the NAS are usually based on the
-		#  name of the user 'outside' of the tunnel (usually
-		#  'anonymous').  If you want to send the reply attributes based
-		#  on the user name inside of the tunnel, then set this
-		#  configuration entry to 'yes', and the reply to the NAS will
-		#  be taken from the reply to the tunneled request.
-		#
-		#  allowed values: {no, yes}
-		#
-		use_tunneled_reply = no
 
 		#
 		#  The inner tunneled request can be sent through a virtual
@@ -772,24 +878,17 @@ eap {
 		default_eap_type = mschapv2
 
 		#
-		#  The PEAP module also has these configuration items, which are
-		#  the same as for TTLS.
+		#  copy_request_to_tunnel has been removed in 3.2.0
 		#
-		copy_request_to_tunnel = no
+		#  See notes in the ttls section about emulating this behaviour.
+		#
 
 		#
-		#  As of version 3.0.5, this configuration item is deprecated.
-		#  Instead, you should use
+		#  use_tunneled_reply has been removed in 3.2.0
 		#
-		# 	update outer.session-state {
-		#		...
+		#  See notes in the ttls section about emulating this behaviour.
 		#
-		#	}
-		#
-		#  This will cache attributes for the final Access-Accept.
-		#
-		use_tunneled_reply = no
-
+			
 		#
 		#  When the tunneled session is proxied, the home server may not
 		#  understand EAP-MSCHAP-V2. Set this entry to "no" to proxy the

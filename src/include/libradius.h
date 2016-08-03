@@ -56,8 +56,9 @@ RCSIDH(libradius_h, "$Id$")
 #endif
 
 /*
- *  Talloc memory allocation is used in preference to malloc throughout
- *  the libraries and server.
+ *  Talloc'd memory must be used throughout the librarys and server.
+ *  This allows us to track allocations in the NULL context and makes
+ *  root causing memory leaks easier.
  */
 #include <talloc.h>
 
@@ -254,8 +255,6 @@ RADIUS_PACKET	*fr_radius_recv(TALLOC_CTX *ctx, int fd, int flags, bool require_m
 
 ssize_t		fr_radius_recv_header(int sockfd, fr_ipaddr_t *src_ipaddr, uint16_t *src_port, unsigned int *code);
 
-void		fr_radius_recv_discard(int sockfd);
-
 int		fr_radius_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secret);
 
 int		fr_radius_decode(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secret);
@@ -286,7 +285,7 @@ int		fr_radius_encode_tunnel_password(char *encpw, size_t *len, char const *secr
 
 int		fr_radius_encode_chap_password(uint8_t *output, RADIUS_PACKET *packet, int id, VALUE_PAIR *password);
 
-ssize_t		fr_radius_encode_value_hton(uint8_t const **out, VALUE_PAIR const *vp);
+ssize_t		fr_radius_encode_value_hton(uint8_t *out, size_t outlen, VALUE_PAIR const *vp);
 
 int		fr_radius_encode_pair(uint8_t *out, size_t outlen, vp_cursor_t *cursor, void *encoder_ctx);
 
@@ -339,6 +338,9 @@ VALUE_PAIR	*fr_cursor_replace(vp_cursor_t *cursor, VALUE_PAIR *new);
 void		fr_cursor_free(vp_cursor_t *cursor);
 
 /* value.c */
+extern size_t const value_data_field_sizes[];
+extern size_t const value_data_offsets[];
+
 int		value_data_cmp(PW_TYPE a_type, value_data_t const *a,
 			       PW_TYPE b_type, value_data_t const *b);
 
@@ -393,6 +395,7 @@ void		fr_printf_log(char const *, ...) CC_HINT(format (printf, 1, 2));
  */
 int		fr_set_signal(int sig, sig_t func);
 int		fr_talloc_link_ctx(TALLOC_CTX *parent, TALLOC_CTX *child);
+int		fr_unset_signal(int sig);
 int		rad_lockfd(int fd, int lock_len);
 int		rad_lockfd_nonblock(int fd, int lock_len);
 int		rad_unlockfd(int fd, int lock_len);

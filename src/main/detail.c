@@ -154,7 +154,8 @@ int detail_send(rad_listen_t *listener, REQUEST *request)
 		 */
 		if (data->delay_time > (USEC / 4)) data->delay_time= USEC / 4;
 
-		RDEBUG3("detail (%s): Received response for request %d.  Will read the next packet in %d seconds",
+		RDEBUG3("detail (%s): Received response for request %" PRIu64 ".  "
+			"Will read the next packet in %d seconds",
 			data->name, request->number, data->delay_time / USEC);
 
 		data->last_packet = now;
@@ -446,7 +447,7 @@ open_file:
 		break;
 	}
 
-	
+
 	switch (data->entry_state) {
 	case STATE_HEADER:
 	do_header:
@@ -1122,6 +1123,9 @@ int detail_parse(CONF_SECTION *cs, rad_listen_t *this)
 	client->longname = client->shortname = data->filename;
 	client->secret = client->shortname;
 	client->nas_type = talloc_strdup(data, "none");	/* Part of 'data' not dynamically allocated */
+
+	this->server_cs = cf_item_parent(cf_section_to_item(this->cs));
+	client->server_cs = this->server_cs;
 
 	return 0;
 }

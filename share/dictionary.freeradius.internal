@@ -292,46 +292,86 @@ ATTRIBUTE	SSHA2-512-Password			1183	octets internal
 
 ATTRIBUTE	Exec-Export				1190	string internal
 
+ATTRIBUTE	EAP-FAST-TLV				1191	tlv	internal
+ATTRIBUTE	EAP-FAST-Result				1191.3	short	internal
+ATTRIBUTE	EAP-FAST-NAK				1191.4	octets	internal
+ATTRIBUTE	EAP-FAST-Error				1191.5	integer	internal
+ATTRIBUTE	EAP-FAST-Vendor-Specific		1191.7	octets	internal
+ATTRIBUTE	EAP-FAST-EAP-Payload			1191.9	octets	internal
+ATTRIBUTE	EAP-FAST-Intermediate-Result		1191.10	octets	internal
+ATTRIBUTE	EAP-FAST-PAC-TLV			1191.11	tlv	internal
+ATTRIBUTE	EAP-FAST-PAC-Key			1191.11.1 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-Opaque-TLV			1191.11.2 tlv	internal
+ATTRIBUTE	EAP-FAST-PAC-Opaque-PAC-Key		1191.11.2.1 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-Opaque-PAC-Lifetime	1191.11.2.3 integer	internal
+ATTRIBUTE	EAP-FAST-PAC-Opaque-I-ID		1191.11.2.5 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-Opaque-PAC-Type		1191.11.2.10 short	internal
+
+ATTRIBUTE	EAP-FAST-PAC-Lifetime			1191.11.3 integer	internal
+ATTRIBUTE	EAP-FAST-PAC-A-ID			1191.11.4 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-I-ID			1191.11.5 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-A-ID-Info			1191.11.7 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-Acknowledge		1191.11.8 short	internal
+ATTRIBUTE	EAP-FAST-PAC-Info-TLV			1191.11.9 tlv	internal
+ATTRIBUTE	EAP-FAST-PAC-Info-PAC-Lifetime		1191.11.9.3 integer	internal
+ATTRIBUTE	EAP-FAST-PAC-Info-A-ID			1191.11.9.4 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-Info-I-ID			1191.11.9.5 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-Info-A-ID-Info		1191.11.9.7 octets	internal
+ATTRIBUTE	EAP-FAST-PAC-Info-PAC-Type		1191.11.9.10 short	internal
+
+ATTRIBUTE	EAP-FAST-PAC-Type			1191.11.10 short	internal
+
+ATTRIBUTE	EAP-FAST-Crypto-Binding			1191.12	struct	internal
+ATTRIBUTE	EAP-FAST-Crypto-Binding-Reserved	1191.12.1 byte	internal
+ATTRIBUTE	EAP-FAST-Crypto-Binding-Version		1191.12.2 byte	internal
+ATTRIBUTE	EAP-FAST-Crypto-Binding-Recv-Version	1191.12.3 byte	internal
+ATTRIBUTE	EAP-FAST-Crypto-Binding-Sub-Type	1191.12.4 byte	internal
+ATTRIBUTE	EAP-FAST-Crypto-Binding-Nonce		1191.12.5 octets[32]	internal
+ATTRIBUTE	EAP-FAST-Crypto-Binding-Compound-MAC	1191.12.6 octets[20]	internal
+
+ATTRIBUTE	EAP-FAST-Trusted-Root			1191.18	octets	internal
+ATTRIBUTE	EAP-FAST-Request-Action			1191.19	short	internal
+ATTRIBUTE	EAP-FAST-PKCS				1191.20	octets	internal
+ATTRIBUTE	MS-CHAP-Peer-Challenge			1192	octets	internal
+
 #
 #	Range:	1200-1279
 #		EAP-SIM (and other EAP type) weirdness.
 #
 #	For EAP-SIM, some attribute definitions for database interface
 #
-ATTRIBUTE	EAP-Sim-Subtype				1200	integer internal
+ATTRIBUTE	EAP-SIM-Subtype				1200	integer internal
 
-ATTRIBUTE	EAP-Sim-Rand1				1201	octets internal
-ATTRIBUTE	EAP-Sim-Rand2				1202	octets internal
-ATTRIBUTE	EAP-Sim-Rand3				1203	octets internal
+ATTRIBUTE	EAP-SIM-Rand				1201	octets internal
+ATTRIBUTE	EAP-SIM-SRES				1202	octets internal
+ATTRIBUTE	EAP-SIM-KC				1203	octets internal
 
-ATTRIBUTE	EAP-Sim-SRES1				1204	octets internal
-ATTRIBUTE	EAP-Sim-SRES2				1205	octets internal
-ATTRIBUTE	EAP-Sim-SRES3				1206	octets internal
-
-VALUE	EAP-Sim-Subtype			Start			10
-VALUE	EAP-Sim-Subtype			Challenge		11
-VALUE	EAP-Sim-Subtype			Notification		12
-VALUE	EAP-Sim-Subtype			Re-authentication	13
+VALUE	EAP-SIM-Subtype			Start			10
+VALUE	EAP-SIM-Subtype			Challenge		11
+VALUE	EAP-SIM-Subtype			Notification		12
+VALUE	EAP-SIM-Subtype			Re-authentication	13
 
 # this attribute is used internally by the client code.
-ATTRIBUTE	EAP-Sim-State				1207	integer internal
+ATTRIBUTE	EAP-SIM-State				1207	integer internal
 
-ATTRIBUTE	EAP-Sim-IMSI				1208	string internal
-ATTRIBUTE	EAP-Sim-HMAC				1209	string internal
-ATTRIBUTE	EAP-Sim-KEY				1210	octets internal
-ATTRIBUTE	EAP-Sim-EXTRA				1211	octets internal
-
-ATTRIBUTE	EAP-Sim-Kc1				1212	octets internal
-ATTRIBUTE	EAP-Sim-Kc2				1213	octets internal
-ATTRIBUTE	EAP-Sim-Kc3				1214	octets internal
+ATTRIBUTE	EAP-SIM-IMSI				1208	string internal
+ATTRIBUTE	EAP-SIM-HMAC				1209	string internal
+ATTRIBUTE	EAP-SIM-Key				1210	octets internal
+ATTRIBUTE	EAP-SIM-Extra				1211	octets internal
 
 ATTRIBUTE	EAP-Sim-Ki				1215	octets internal
 ATTRIBUTE	EAP-Sim-Algo-Version			1216	integer internal
 
+ATTRIBUTE	EAP-AKA-RAND				1217	octets internal
+ATTRIBUTE	EAP-AKA-XRES				1218	octets internal
+ATTRIBUTE	EAP-AKA-CK				1219	octets internal
+ATTRIBUTE	EAP-AKA-IK				1220	octets internal
+ATTRIBUTE	EAP-AKA-AUTHN				1221	octets internal
+
 #
 #  Server-side "listen type = foo"
 #
-ATTRIBUTE	Listen-Socket-Type			1217	integer internal
+ATTRIBUTE	Listen-Socket-Type			1250	integer internal
 
 VALUE	Listen-Socket-Type		none			0
 VALUE	Listen-Socket-Type		status			0
@@ -345,8 +385,8 @@ VALUE	Listen-Socket-Type		dhcp			6
 VALUE	Listen-Socket-Type		control			7
 VALUE	Listen-Socket-Type		coa			8
 
-ATTRIBUTE	Outer-Realm-Name			1218	string internal
-ATTRIBUTE	Inner-Realm-Name			1219	string internal
+ATTRIBUTE	Outer-Realm-Name			1251	string internal
+ATTRIBUTE	Inner-Realm-Name			1252	string internal
 
 #
 #	Range:	1280 - 1535
@@ -425,7 +465,7 @@ ATTRIBUTE	EAP-Type-MS-CHAP-V2			1306	octets internal
 
 # these are PW_EAP_SIM_X + 1536
 ATTRIBUTE	EAP_Sim-Base				1536	octets internal
-ATTRIBUTE	EAP-Sim-RAND				1537	octets internal
+ATTRIBUTE	EAP-Sim-PRAND				1537	octets internal
 ATTRIBUTE	EAP-Sim-PADDING				1542	octets internal
 ATTRIBUTE	EAP-Sim-NONCE_MT			1543	octets internal
 ATTRIBUTE	EAP-Sim-PERMANENT_ID_REQ		1546	octets internal
@@ -504,58 +544,39 @@ ATTRIBUTE	Tmp-Date-7				1847	date internal
 ATTRIBUTE	Tmp-Date-8				1848	date internal
 ATTRIBUTE	Tmp-Date-9				1849	date internal
 
-ATTRIBUTE	Tmp-Integer64-0				1871	integer64 internal
-ATTRIBUTE	Tmp-Integer64-1				1872	integer64 internal
-ATTRIBUTE	Tmp-Integer64-2				1873	integer64 internal
-ATTRIBUTE	Tmp-Integer64-3				1874	integer64 internal
-ATTRIBUTE	Tmp-Integer64-4				1875	integer64 internal
-ATTRIBUTE	Tmp-Integer64-5				1876	integer64 internal
-ATTRIBUTE	Tmp-Integer64-6				1877	integer64 internal
-ATTRIBUTE	Tmp-Integer64-7				1878	integer64 internal
-ATTRIBUTE	Tmp-Integer64-8				1879	integer64 internal
-ATTRIBUTE	Tmp-Integer64-9				1880	integer64 internal
+#
+#  Attributes 1850 through 1850 + PW_TYPE_MAX are reserved.
+#
 
-ATTRIBUTE	Tmp-Signed-0				1881	signed internal
-ATTRIBUTE	Tmp-Signed-1				1882	signed internal
-ATTRIBUTE	Tmp-Signed-2				1883	signed internal
-ATTRIBUTE	Tmp-Signed-3				1884	signed internal
-ATTRIBUTE	Tmp-Signed-4				1885	signed internal
-ATTRIBUTE	Tmp-Signed-5				1886	signed internal
-ATTRIBUTE	Tmp-Signed-6				1887	signed internal
-ATTRIBUTE	Tmp-Signed-7				1888	signed internal
-ATTRIBUTE	Tmp-Signed-8				1889	signed internal
-ATTRIBUTE	Tmp-Signed-9				1890	signed internal
+ATTRIBUTE	Tmp-Integer64-0				1850	integer64 internal
+ATTRIBUTE	Tmp-Integer64-1				1851	integer64 internal
+ATTRIBUTE	Tmp-Integer64-2				1852	integer64 internal
+ATTRIBUTE	Tmp-Integer64-3				1853	integer64 internal
+ATTRIBUTE	Tmp-Integer64-4				1854	integer64 internal
+ATTRIBUTE	Tmp-Integer64-5				1855	integer64 internal
+ATTRIBUTE	Tmp-Integer64-6				1856	integer64 internal
+ATTRIBUTE	Tmp-Integer64-7				1857	integer64 internal
+ATTRIBUTE	Tmp-Integer64-8				1858	integer64 internal
+ATTRIBUTE	Tmp-Integer64-9				1859	integer64 internal
+
+ATTRIBUTE	Tmp-Signed-0				1860	signed internal
+ATTRIBUTE	Tmp-Signed-1				1861	signed internal
+ATTRIBUTE	Tmp-Signed-2				1862	signed internal
+ATTRIBUTE	Tmp-Signed-3				1863	signed internal
+ATTRIBUTE	Tmp-Signed-4				1864	signed internal
+ATTRIBUTE	Tmp-Signed-5				1865	signed internal
+ATTRIBUTE	Tmp-Signed-6				1866	signed internal
+ATTRIBUTE	Tmp-Signed-7				1867	signed internal
+ATTRIBUTE	Tmp-Signed-8				1868	signed internal
+ATTRIBUTE	Tmp-Signed-9				1869	signed internal
+
+# 1870 - 1890, unused
 
 #
 #  Mostly for testing
 #
 ATTRIBUTE	Tmp-String-Tagged-0			1891	string has_tag,internal
 ATTRIBUTE	Tmp-String-Tagged-1			1892	string has_tag,internal
-
-#
-#  These attributes shouldn't be used anywhere.  They are defined here
-#  only for casting of values in conditional expressions.
-#
-#  The order and number need to be consistent with the typedefs used
-#  in the server source.
-#
-ATTRIBUTE	Tmp-Cast-String				1851	string internal
-ATTRIBUTE	Tmp-Cast-Integer			1852	integer internal
-ATTRIBUTE	Tmp-Cast-Ipaddr				1853	ipaddr internal
-ATTRIBUTE	Tmp-Cast-Date				1854	date internal
-ATTRIBUTE	Tmp-Cast-Abinary			1855	abinary internal
-ATTRIBUTE	Tmp-Cast-Octets				1856	octets internal
-ATTRIBUTE	Tmp-Cast-Ifid				1857	ifid internal
-ATTRIBUTE	Tmp-Cast-IPv6Addr			1858	ipv6addr internal
-ATTRIBUTE	Tmp-Cast-IPv6Prefix			1859	ipv6prefix internal
-ATTRIBUTE	Tmp-Cast-Byte				1860	byte internal
-ATTRIBUTE	Tmp-Cast-Short				1861	short internal
-ATTRIBUTE	Tmp-Cast-Ethernet			1862	ether internal
-ATTRIBUTE	Tmp-Cast-Signed				1863	signed internal
-# don't use or define these
-ATTRIBUTE	Tmp-Cast-Integer64			1869	integer64 internal
-ATTRIBUTE	Tmp-Cast-IPv4Prefix			1870	ipv4prefix internal
-# don't use or define VSA or MAX
 
 #	Range:	1900-1909
 #	WiMAX server-side attributes.
@@ -596,10 +617,12 @@ ATTRIBUTE	TLS-Session-Cert-File			1934	string internal
 
 # 1940 - 1949: reserved for TLS session caching
 ATTRIBUTE	TLS-Session-Id				1940	octets	internal
-ATTRIBUTE	TLS-Session-Cache-Action		1941	integer	internal
-VALUE	TLS-Session-Cache-Action	Read			1
-VALUE	TLS-Session-Cache-Action	Write			2
-VALUE	TLS-Session-Cache-Action	Delete			3
+ATTRIBUTE	TLS-Cache-Action		1941	integer	internal
+VALUE	TLS-Cache-Action	Session-Read			1
+VALUE	TLS-Cache-Action	Session-Write			2
+VALUE	TLS-Cache-Action	Session-Delete			3
+VALUE	TLS-Cache-Action	OCSP-Read			4
+VALUE	TLS-Cache-Action	OCSP-Write			5
 
 ATTRIBUTE	TLS-Session-Data			1942	octets	internal
 
@@ -612,7 +635,7 @@ VALUE	TLS-OCSP-Cert-Valid		no			0
 
 # Number of seconds before new OCSP status information will be available
 ATTRIBUTE	TLS-OCSP-Next-Update			1944	integer internal
-
+ATTRIBUTE	TLS-OCSP-Response			1945	octets internal
 #
 #	Range:	1951-2099
 #		Free
@@ -657,16 +680,30 @@ ATTRIBUTE	SoH-MS-Health-Other			2129	string internal
 ATTRIBUTE	Radclient-Test-Name			2200	string internal
 
 #
-#       Range:  2220-260
+#       Range:  2220-2260
 #               Attributes used as trigger arguments
 #
 ATTRIBUTE	Connection-Pool-Server			2220	string internal
 ATTRIBUTE	Connection-Pool-Port			2221	short internal
 ATTRIBUTE	Exfile-Name				2223	string internal
+
 #
-#	Range:	2261-2999
+#	Range:	2261-2299
 #		Free
 #
+
+#	Range: 2300 - 2399
+#		Attributes used for casting.
+#		They are automatically defined by the server core.
+#		Do NOT define attributes in this range!
+#
+ATTRIBUTE	Cast-Base				2300	byte	internal
+
+#
+#	Range:	2400-2999
+#		Free
+#
+
 #	Range:	3000-3999
 #		Site-local attributes (see raddb/dictionary.in)
 #		Do NOT define attributes in this range!

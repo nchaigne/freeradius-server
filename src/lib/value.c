@@ -25,6 +25,58 @@ RCSID("$Id$")
 #include <freeradius-devel/libradius.h>
 #include <ctype.h>
 
+/** How many bytes wide each of the value data fields are
+ *
+ * This is useful when copying a value from a value_data_t to a memory
+ * location passed as a void *.
+ */
+size_t const value_data_field_sizes[] = {
+	[PW_TYPE_STRING]	= SIZEOF_MEMBER(value_data_t, strvalue),
+	[PW_TYPE_OCTETS]	= SIZEOF_MEMBER(value_data_t, octets),
+	[PW_TYPE_IFID]		= SIZEOF_MEMBER(value_data_t, ifid),
+	[PW_TYPE_IPV4_ADDR]	= SIZEOF_MEMBER(value_data_t, ipaddr),
+	[PW_TYPE_IPV4_PREFIX]	= SIZEOF_MEMBER(value_data_t, ipv4prefix),
+	[PW_TYPE_IPV6_ADDR]	= SIZEOF_MEMBER(value_data_t, ipv6addr),
+	[PW_TYPE_IPV6_PREFIX]	= SIZEOF_MEMBER(value_data_t, ipv6prefix),
+	[PW_TYPE_BOOLEAN]	= SIZEOF_MEMBER(value_data_t, boolean),
+	[PW_TYPE_BYTE]		= SIZEOF_MEMBER(value_data_t, byte),
+	[PW_TYPE_SHORT]		= SIZEOF_MEMBER(value_data_t, ushort),
+	[PW_TYPE_INTEGER]	= SIZEOF_MEMBER(value_data_t, integer),
+	[PW_TYPE_INTEGER64]	= SIZEOF_MEMBER(value_data_t, integer64),
+	[PW_TYPE_SIGNED]	= SIZEOF_MEMBER(value_data_t, sinteger),
+	[PW_TYPE_DECIMAL]	= SIZEOF_MEMBER(value_data_t, decimal),
+	[PW_TYPE_ETHERNET]	= SIZEOF_MEMBER(value_data_t, ether),
+	[PW_TYPE_DATE]		= SIZEOF_MEMBER(value_data_t, date),
+	[PW_TYPE_MAX]		= 0	/* Force compiler to allocate memory for all types */
+};
+
+/** Just in case we have a particularly rebellious compiler
+ *
+ * @note Not even sure if this is required though it does make the code
+ * 	more robust in the case where someone changes the order of the
+ *	fields in the #value_data_t struct.
+ *
+ */
+size_t const value_data_offsets[] = {
+	[PW_TYPE_STRING]	= offsetof(value_data_t, strvalue),
+	[PW_TYPE_OCTETS]	= offsetof(value_data_t, octets),
+	[PW_TYPE_IFID]		= offsetof(value_data_t, ifid),
+	[PW_TYPE_IPV4_ADDR]	= offsetof(value_data_t, ipaddr),
+	[PW_TYPE_IPV4_PREFIX]	= offsetof(value_data_t, ipv4prefix),
+	[PW_TYPE_IPV6_ADDR]	= offsetof(value_data_t, ipv6addr),
+	[PW_TYPE_IPV6_PREFIX]	= offsetof(value_data_t, ipv6prefix),
+	[PW_TYPE_BOOLEAN]	= offsetof(value_data_t, boolean),
+	[PW_TYPE_BYTE]		= offsetof(value_data_t, byte),
+	[PW_TYPE_SHORT]		= offsetof(value_data_t, ushort),
+	[PW_TYPE_INTEGER]	= offsetof(value_data_t, integer),
+	[PW_TYPE_INTEGER64]	= offsetof(value_data_t, integer64),
+	[PW_TYPE_SIGNED]	= offsetof(value_data_t, sinteger),
+	[PW_TYPE_DECIMAL]	= offsetof(value_data_t, decimal),
+	[PW_TYPE_ETHERNET]	= offsetof(value_data_t, ether),
+	[PW_TYPE_DATE]		= offsetof(value_data_t, date),
+	[PW_TYPE_MAX]		= 0	/* Force compiler to allocate memory for all types */
+};
+
 /** Compare two values
  *
  * @param[in] a_type of data to compare.
@@ -1146,7 +1198,10 @@ int value_data_cast(TALLOC_CTX *ctx, value_data_t *dst,
 		    PW_TYPE src_type, fr_dict_attr_t const *src_enumv,
 		    value_data_t const *src)
 {
-	if (!fr_cond_assert(dst_type != src_type)) return -1;
+	/*
+	 *	If it's the same type, copy.
+	 */
+	if (dst_type == src_type) return value_data_copy(ctx, dst, src_type, src);
 
 	/*
 	 *	Deserialise a value_data_t
@@ -1762,17 +1817,11 @@ char *value_data_asprint(TALLOC_CTX *ctx,
 	/*
 	 *	Don't add default here
 	 */
-	case PW_TYPE_INVALID:
 	case PW_TYPE_COMBO_IP_ADDR:
 	case PW_TYPE_COMBO_IP_PREFIX:
-	case PW_TYPE_TLV:
-	case PW_TYPE_EXTENDED:
-	case PW_TYPE_LONG_EXTENDED:
-	case PW_TYPE_EVS:
-	case PW_TYPE_VSA:
-	case PW_TYPE_VENDOR:
+	case PW_TYPE_STRUCTURAL:
 	case PW_TYPE_TIMEVAL:
-	case PW_TYPE_MAX:
+	case PW_TYPE_BAD:
 		(void)fr_cond_assert(0);
 		return NULL;
 	}
@@ -2009,6 +2058,7 @@ print_int:
 	case PW_TYPE_VENDOR:
 	case PW_TYPE_TIMEVAL:
 	case PW_TYPE_BOOLEAN:
+	case PW_TYPE_STRUCT:
 	case PW_TYPE_MAX:
 		(void)fr_cond_assert(0);
 		*out = '\0';

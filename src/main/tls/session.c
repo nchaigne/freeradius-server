@@ -31,6 +31,30 @@
 #include <ctype.h>
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/rad_assert.h>
+#include <openssl/x509v3.h>
+
+/*
+ *	For creating certificate attributes.
+ */
+static char const *cert_attr_names[8][2] = {
+	{ "TLS-Client-Cert-Serial",			"TLS-Cert-Serial" },
+	{ "TLS-Client-Cert-Expiration",			"TLS-Cert-Expiration" },
+	{ "TLS-Client-Cert-Subject",			"TLS-Cert-Subject" },
+	{ "TLS-Client-Cert-Issuer",			"TLS-Cert-Issuer" },
+	{ "TLS-Client-Cert-Common-Name",		"TLS-Cert-Common-Name" },
+	{ "TLS-Client-Cert-Subject-Alt-Name-Email",	"TLS-Cert-Subject-Alt-Name-Email" },
+	{ "TLS-Client-Cert-Subject-Alt-Name-Dns",	"TLS-Cert-Subject-Alt-Name-Dns" },
+	{ "TLS-Client-Cert-Subject-Alt-Name-Upn",	"TLS-Cert-Subject-Alt-Name-Upn" }
+};
+
+#define FR_TLS_SERIAL		(0)
+#define FR_TLS_EXPIRATION	(1)
+#define FR_TLS_SUBJECT		(2)
+#define FR_TLS_ISSUER		(3)
+#define FR_TLS_CN		(4)
+#define FR_TLS_SAN_EMAIL       	(5)
+#define FR_TLS_SAN_DNS          (6)
+#define FR_TLS_SAN_UPN          (7)
 
 /** Clear a record buffer
  *
@@ -193,7 +217,6 @@ unsigned int tls_session_psk_client_cb(SSL *ssl, UNUSED char const *hint,
  * @return
  *	- 0 if no PSK matching identity was found.
  *	- >0 if a PSK matching identity was found (the length of bytes written to psk).
-
  */
 unsigned int tls_session_psk_server_cb(SSL *ssl, const char *identity,
 				       unsigned char *psk, unsigned int max_psk_len)
@@ -285,9 +308,9 @@ void tls_session_info_cb(SSL const *ssl, int where, int ret)
 	REQUEST		*request = SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_REQUEST);
 
 	if ((where & ~SSL_ST_MASK) & SSL_ST_CONNECT) {
-		role = "client ";
+		role = "Client ";
 	} else if (((where & ~SSL_ST_MASK)) & SSL_ST_ACCEPT) {
-		role = "server ";
+		role = "Server ";
 	} else {
 		role = "";
 	}
@@ -296,7 +319,20 @@ void tls_session_info_cb(SSL const *ssl, int where, int ret)
 	state = state ? state : "<INVALID>";
 
 	if ((where & SSL_CB_LOOP) || (where & SSL_CB_HANDSHAKE_START) || (where & SSL_CB_HANDSHAKE_DONE)) {
-		RDEBUG2("Handshake state: %s%s", role, state);
+		if (RDEBUG_ENABLED3) {
+			char const *abbrv = SSL_state_string(ssl);
+			size_t len;
+
+			/*
+			 *	Trim crappy OpenSSL state strings...
+			 */
+			len = strlen(abbrv);
+			if ((len > 1) && (abbrv[len - 1] == ' ')) len--;
+
+			RDEBUG3("Handshake state [%.*s] - %s%s", (int)len, abbrv, role, state);
+		} else {
+			RDEBUG2("Handshake state - %s%s", role, state);
+		}
 		return;
 	}
 
@@ -333,7 +369,7 @@ void tls_session_info_cb(SSL const *ssl, int where, int ret)
 
 		if (ret < 0) {
 			if (SSL_want_read(ssl)) {
-				RDEBUG2("Need to read more data: %s%s", role, state);
+				RDEBUG2("Need more data from client"); /* State same as previous call, don't print */
 				return;
 			}
 			REDEBUG("Handshake exit state %s%s", role, state);
@@ -420,9 +456,11 @@ static void session_msg_log(REQUEST *request, tls_session_t *tls_session)
 		str_content_type = "application_data ";
 		break;
 
+#ifdef TLS1_RT_HEARTBEAT
 	case TLS1_RT_HEARTBEAT:
 		str_content_type = "heartbeat ";
 		break;
+#endif
 
 #ifdef TLS1_RT_CRYPTO
 	case TLS1_RT_CRYPTO:
@@ -796,6 +834,219 @@ void tls_session_msg_cb(int write_p, int msg_version, int content_type,
 	session_msg_log(request, session);
 }
 
+/** Extract attributes from an X509 certificate
+ *
+ * @param cursor	to copy attributes to.
+ * @param ctx		to allocate attributes in.
+ * @param session	current TLS session.
+ * @param cert		to validate.
+ * @param depth		the certificate is in the certificate chain (0 == leaf).
+ * @return
+ *	- 0 on success.
+ *	- < 0 on failure.
+ */
+int tls_session_pairs_from_x509_cert(vp_cursor_t *cursor, TALLOC_CTX *ctx,
+				     tls_session_t *session, X509 *cert, int depth)
+{
+	char		buffer[1024];
+	char		attribute[256];
+	char		**identity;
+
+	int		attr_index, loc;
+
+	STACK_OF(X509_EXTENSION) *ext_list = NULL;
+
+	ASN1_INTEGER	*sn = NULL;
+	ASN1_TIME	*asn_time = NULL;
+
+	VALUE_PAIR	*vp = NULL;
+
+	REQUEST		*request;
+
+	attr_index = depth;
+	if (attr_index > 1) attr_index = 1;
+
+#define ADD_CERT_ATTR(_name, _value) \
+do { \
+	VALUE_PAIR *_vp; \
+	_vp = fr_pair_make(ctx, NULL, _name, _value, T_OP_SET); \
+	if (_vp) { \
+		fr_cursor_append(cursor, _vp); \
+	} else { \
+		RWDEBUG("Failed creating attribute %s: %s", _name, fr_strerror()); \
+	} \
+} while (0)
+
+	request = (REQUEST *)SSL_get_ex_data(session->ssl, FR_TLS_EX_INDEX_REQUEST);
+	rad_assert(request != NULL);
+
+	identity = (char **)SSL_get_ex_data(session->ssl, FR_TLS_EX_INDEX_IDENTITY);
+
+	RDEBUG2("Creating attributes from certificate OIDs");
+
+	/*
+	 *	Get the Serial Number
+	 */
+	sn = X509_get_serialNumber(cert);
+	if (sn && ((size_t) sn->length < (sizeof(buffer) / 2))) {
+		char *p = buffer;
+		int i;
+
+		for (i = 0; i < sn->length; i++) {
+			sprintf(p, "%02x", (unsigned int)sn->data[i]);
+			p += 2;
+		}
+		ADD_CERT_ATTR(cert_attr_names[FR_TLS_SERIAL][attr_index], buffer);
+	}
+
+	/*
+	 *	Get the Expiration Date
+	 */
+	buffer[0] = '\0';
+	asn_time = X509_get_notAfter(cert);
+	if (identity && asn_time && (asn_time->length < (int)sizeof(buffer))) {
+		memcpy(buffer, (char *)asn_time->data, asn_time->length);
+		buffer[asn_time->length] = '\0';
+		ADD_CERT_ATTR(cert_attr_names[FR_TLS_EXPIRATION][attr_index], buffer);
+	}
+
+	/*
+	 *	Get the Subject & Issuer
+	 */
+	buffer[0] = '\0';
+	X509_NAME_oneline(X509_get_subject_name(cert), buffer, sizeof(buffer));
+	buffer[sizeof(buffer) - 1] = '\0';
+	if (identity && buffer[0]) {
+		ADD_CERT_ATTR(cert_attr_names[FR_TLS_SUBJECT][attr_index], buffer);
+
+		/*
+		 *	Get the Common Name, if there is a subject.
+		 */
+		X509_NAME_get_text_by_NID(X509_get_subject_name(cert),
+					  NID_commonName, buffer, sizeof(buffer));
+		buffer[sizeof(buffer) - 1] = '\0';
+
+		if (buffer[0]) {
+			ADD_CERT_ATTR(cert_attr_names[FR_TLS_CN][attr_index], buffer);
+		}
+	}
+
+	X509_NAME_oneline(X509_get_issuer_name(cert), buffer, sizeof(buffer));
+	buffer[sizeof(buffer) - 1] = '\0';
+	if (identity && buffer[0]) {
+		ADD_CERT_ATTR(cert_attr_names[FR_TLS_ISSUER][attr_index], buffer);
+	}
+
+	/*
+	 *	Get the RFC822 Subject Alternative Name
+	 */
+	loc = X509_get_ext_by_NID(cert, NID_subject_alt_name, 0);
+	if (loc >= 0) {
+		X509_EXTENSION	*ext = NULL;
+		GENERAL_NAMES	*names = NULL;
+		int		i;
+
+		ext = X509_get_ext(cert, loc);
+		if (ext && (names = X509V3_EXT_d2i(ext))) {
+			for (i = 0; i < sk_GENERAL_NAME_num(names); i++) {
+				GENERAL_NAME *name = sk_GENERAL_NAME_value(names, i);
+
+				switch (name->type) {
+#ifdef GEN_EMAIL
+				case GEN_EMAIL:
+					ADD_CERT_ATTR(cert_attr_names[FR_TLS_SAN_EMAIL][attr_index],
+						      (char *)ASN1_STRING_data(name->d.rfc822Name));
+					break;
+#endif	/* GEN_EMAIL */
+#ifdef GEN_DNS
+				case GEN_DNS:
+					ADD_CERT_ATTR(cert_attr_names[FR_TLS_SAN_DNS][attr_index],
+						      (char *)ASN1_STRING_data(name->d.dNSName));
+					break;
+#endif	/* GEN_DNS */
+#ifdef GEN_OTHERNAME
+				case GEN_OTHERNAME:
+					/* look for a MS UPN */
+					if (NID_ms_upn != OBJ_obj2nid(name->d.otherName->type_id)) break;
+
+					/* we've got a UPN - Must be ASN1-encoded UTF8 string */
+					if (name->d.otherName->value->type == V_ASN1_UTF8STRING) {
+						ADD_CERT_ATTR(cert_attr_names[FR_TLS_SAN_UPN][attr_index],
+							      (char *)name->d.otherName->value->value.utf8string);
+						break;
+					}
+
+					RWARN("Invalid UPN in Subject Alt Name (should be UTF-8)");
+					break;
+#endif	/* GEN_OTHERNAME */
+				default:
+					/* XXX TODO handle other SAN types */
+					break;
+				}
+			}
+		}
+		if (names != NULL) sk_GENERAL_NAME_free(names);
+	}
+
+	/*
+	 *	Only add extensions for the actual client certificate
+	 */
+	if (attr_index == 0) {
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+		ext_list = X509_get0_extensions(cert);
+#else
+		ext_list = cert->cert_info->extensions;
+#endif
+
+		/*
+		 *	Grab the X509 extensions, and create attributes out of them.
+		 *	For laziness, we re-use the OpenSSL names
+		 */
+		if (sk_X509_EXTENSION_num(ext_list) > 0) {
+			int i, len;
+			char *p;
+			BIO *out;
+
+			out = BIO_new(BIO_s_mem());
+			strlcpy(attribute, "TLS-Client-Cert-", sizeof(attribute));
+
+			for (i = 0; i < sk_X509_EXTENSION_num(ext_list); i++) {
+				char value[1024];
+				ASN1_OBJECT	*obj;
+				X509_EXTENSION	*ext;
+
+				ext = sk_X509_EXTENSION_value(ext_list, i);
+
+				obj = X509_EXTENSION_get_object(ext);
+				i2a_ASN1_OBJECT(out, obj);
+
+				len = BIO_read(out, attribute + 16 , sizeof(attribute) - 16 - 1);
+				if (len <= 0) continue;
+
+				attribute[16 + len] = '\0';
+
+				for (p = attribute + 16; *p != '\0'; p++) if (*p == ' ') *p = '-';
+
+				X509V3_EXT_print(out, ext, 0, 0);
+				len = BIO_read(out, value , sizeof(value) - 1);
+				if (len <= 0) continue;
+
+				value[len] = '\0';
+
+				vp = fr_pair_make(request, NULL, attribute, value, T_OP_ADD);
+				if (!vp) {
+					RDEBUG3("Skipping: %s += '%s'", attribute, value);
+				} else {
+					fr_cursor_append(cursor, vp);
+				}
+			}
+			BIO_free_all(out);
+		}
+	}
+
+	return 0;
+}
+
 /** Decrypt application data
  *
  * @note Handshake must have completed before this function may be called.
@@ -925,6 +1176,20 @@ int tls_session_send(REQUEST *request, tls_session_t *session)
 	}
 
 	return 1;
+}
+
+int tls_session_handshake_alert(UNUSED REQUEST *request, tls_session_t *session, uint8_t level, uint8_t description)
+{
+	rad_assert(session->handshake_alert.level == 0);
+
+	session->handshake_alert.count++;
+	if (session->handshake_alert.count > 3)
+		return -1;
+
+	session->handshake_alert.level = level;
+	session->handshake_alert.description = description;
+
+	return 0;
 }
 
 /** Continue a TLS handshake
@@ -1059,6 +1324,16 @@ int tls_session_handshake(REQUEST *request, tls_session_t *session)
 			}
 		}
 #endif
+
+		/*
+		 *	Session was resumed, add attribute to mark it as such.
+		 */
+		if (SSL_session_reused(session->ssl)) {
+			/*
+			 *	Mark the request as resumed.
+			 */
+			pair_make_request("EAP-Session-Resumed", "1", T_OP_SET);
+		}
 	}
 
 	/*
@@ -1083,6 +1358,31 @@ int tls_session_handshake(REQUEST *request, tls_session_t *session)
 	} else {
 		/* Its clean application data, do whatever we want */
 		record_init(&session->clean_out);
+	}
+
+	/*
+	 *	W would prefer to latch on info.content_type but
+	 *	(I think its...) tls_session_msg_cb() updates it
+	 *	after the call to tls_session_handshake_alert()
+	 */
+	if (session->handshake_alert.level) {
+		/*
+		 * FIXME RFC 4851 section 3.6.1 - peer might ACK alert and include a restarted ClientHello
+		 *                                 which eap_tls_session_status() will fail on
+		 */
+		session->info.content_type = SSL3_RT_ALERT;
+
+		session->dirty_out.data[0] = session->info.content_type;
+		session->dirty_out.data[1] = 3;
+		session->dirty_out.data[2] = 1;
+		session->dirty_out.data[3] = 0;
+		session->dirty_out.data[4] = 2;
+		session->dirty_out.data[5] = session->handshake_alert.level;
+		session->dirty_out.data[6] = session->handshake_alert.description;
+
+		session->dirty_out.used = 7;
+
+		session->handshake_alert.level = 0;
 	}
 
 	/* We are done with dirty_in, reinitialize it */

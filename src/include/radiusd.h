@@ -206,7 +206,8 @@ struct rad_request {
 	uint32_t		magic; 		//!< Magic number used to detect memory corruption,
 						//!< or request structs that have not been properly initialised.
 #endif
-	unsigned int	       	number; 	//!< Monotonically increasing request number. Reset on server restart.
+	uint64_t		number; 	//!< Monotonically increasing request number. Reset on server restart.
+
 	struct timeval		timestamp;	//!< When we started processing the request.
 
 	request_data_t		*data;		//!< Request metadata.
@@ -225,6 +226,8 @@ struct rad_request {
 	VALUE_PAIR		*control;	//!< #VALUE_PAIR (s) used to set per request parameters
 						//!< for modules and the server core at runtime.
 
+	uint64_t		seq_start;	//!< State sequence ID.  Stable identifier for a sequence of requests
+						//!< and responses.
 	TALLOC_CTX		*state_ctx;	//!< for request->state
 	VALUE_PAIR		*state;		//!< #VALUE_PAIR (s) available over the lifetime of the authentication
 						//!< attempt. Useful where the attempt involves a sequence of
@@ -242,7 +245,8 @@ struct rad_request {
 						//!< various server configuration sections.
 
 	rlm_rcode_t		rcode;		//!< Last rcode returned by a module
-	char const		*server;	//!< virtual server which is processing the request.
+	char const		*server;	//!< name of the virtual server which is processing the request.
+
 	char const		*component; 	//!< Section the request is in.
 	char const		*module;	//!< Module the request is currently being processed by.
 
@@ -387,7 +391,6 @@ size_t		rad_filename_make_safe(UNUSED REQUEST *request, char *out, size_t outlen
 size_t		rad_filename_escape(UNUSED REQUEST *request, char *out, size_t outlen,
 				    char const *in, UNUSED void *arg);
 ssize_t		rad_filename_unescape(char *out, size_t outlen, char const *in, size_t inlen);
-void		*rad_malloc(size_t size); /* calls exit(1) on error! */
 void		rad_const_free(void const *ptr);
 char		*rad_ajoin(TALLOC_CTX *ctx, char const **argv, int argc, char c);
 REQUEST		*request_alloc(TALLOC_CTX *ctx);
@@ -544,7 +547,6 @@ int radius_copy_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, char con
 int	thread_pool_bootstrap(CONF_SECTION *cs, bool *spawn_workers);
 int	thread_pool_init(void);
 void	thread_pool_stop(void);
-int	thread_pool_addrequest(REQUEST *, RAD_REQUEST_FUNP);
 int	total_active_threads(void);
 void	thread_pool_lock(void);
 void	thread_pool_unlock(void);

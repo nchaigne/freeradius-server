@@ -563,7 +563,7 @@ static int _driver_show_lease_process(void *out, fr_ipaddr_t const *ipaddr, redi
 	 *	Grow the result array...
 	 */
 	existing = talloc_array_length(*modified);
-	*modified = talloc_realloc(NULL, *modified, ippool_tool_lease_t *, existing + 1);
+	MEM(*modified = talloc_realloc(NULL, *modified, ippool_tool_lease_t *, existing + 1));
 	(*modified)[existing - 1] = lease;
 
 	return 0;
@@ -797,7 +797,7 @@ static int _driver_modify_lease_process(void *out, UNUSED fr_ipaddr_t const *ipa
  */
 static int _driver_modify_lease_enqueue(UNUSED redis_driver_conf_t *inst, fr_redis_conn_t *conn,
 					uint8_t const *key_prefix, size_t key_prefix_len,
-					UNUSED uint8_t const *range, UNUSED size_t range_len,
+					uint8_t const *range, size_t range_len,
 					fr_ipaddr_t *ipaddr, uint8_t prefix)
 {
 	uint8_t		key[IPPOOL_MAX_POOL_KEY_SIZE];
@@ -956,7 +956,8 @@ static ssize_t driver_get_pools(TALLOC_CTX *ctx, uint8_t **out[], void *instance
 			}
 
 			if ((talloc_array_length(result) - used) < reply->element[1]->elements) {
-				result = talloc_realloc(ctx, result, uint8_t *, used + reply->element[1]->elements);
+				MEM(result = talloc_realloc(ctx, result, uint8_t *,
+							    used + reply->element[1]->elements));
 				if (!result) {
 					ERROR("Failed expanding array of pool names");
 					goto reply_error;
@@ -998,8 +999,6 @@ static ssize_t driver_get_pools(TALLOC_CTX *ctx, uint8_t **out[], void *instance
 		fr_connection_release(pool, request, conn);
 	}
 
-	talloc_free(request);
-
 	if (used == 0) {
 		*out = NULL;
 		talloc_free(result);
@@ -1014,7 +1013,7 @@ static ssize_t driver_get_pools(TALLOC_CTX *ctx, uint8_t **out[], void *instance
 
 		memcpy(&to_sort, &result, sizeof(to_sort));
 
-		fr_quick_sort((void const **)to_sort, 0, used - 1, pool_cmp);
+		fr_quick_sort((void const **)to_sort, 0, used, pool_cmp);
 	}
 
 	*out = talloc_array(ctx, uint8_t *, used);
@@ -1034,6 +1033,7 @@ static ssize_t driver_get_pools(TALLOC_CTX *ctx, uint8_t **out[], void *instance
 		while ((i < used) && (pool_cmp(result[i - 1], result[i]) == 0)) i++;
 	} while (i < used);
 
+	talloc_free(request);
 	talloc_free(result);
 
 	return used;
@@ -1301,7 +1301,8 @@ static int parse_ip_range(fr_ipaddr_t *start_out, fr_ipaddr_t *end_out, char con
 	if (start.af == AF_INET6) {
 		uint128_t ip, p_mask;
 
-		rad_assert((prefix > 0) && (prefix <= 128));
+		/* cond assert to satisfy clang scan */
+		if (!rad_cond_assert((prefix > 0) && (prefix <= 128))) return -1;
 
 		/* Don't be tempted to cast */
 		memcpy(&ip, start.ipaddr.ip6addr.s6_addr, sizeof(ip));
@@ -1317,7 +1318,8 @@ static int parse_ip_range(fr_ipaddr_t *start_out, fr_ipaddr_t *end_out, char con
 	} else {
 		uint32_t ip;
 
-		rad_assert((prefix > 0) && (prefix <= 32));
+		/* cond assert to satisfy clang scan */
+		if (!rad_cond_assert((prefix > 0) && (prefix <= 32))) return -1;
 
 		ip = ntohl(start.ipaddr.ip4addr.s_addr);
 
@@ -1480,7 +1482,7 @@ do { \
 
 		arg = talloc_array(conf, uint8_t, strlen(argv[1]));
 		len = fr_value_str_unescape(arg, argv[1], talloc_array_length(arg), '"');
-		pool_arg = talloc_realloc(conf, arg, uint8_t, len);
+		MEM(pool_arg = talloc_realloc(conf, arg, uint8_t, len));
 	}
 
 	if (argc >= 3) {
@@ -1489,7 +1491,7 @@ do { \
 
 		arg = talloc_array(conf, uint8_t, strlen(argv[2]));
 		len = fr_value_str_unescape(arg, argv[2], talloc_array_length(arg), '"');
-		range_arg = talloc_realloc(conf, arg, uint8_t, len);
+		MEM(range_arg = talloc_realloc(conf, arg, uint8_t, len));
 	}
 
 	if (!do_import && !do_export && !list_pools && !print_stats && (p == ops)) {

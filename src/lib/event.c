@@ -1,27 +1,26 @@
 /*
- * event.c	Non-thread-safe event handling, specific to a RADIUS
- *		server.
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
  *
- * Version:	$Id$
- *
- *   This library is free software; you can redistribute it and/or
- *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
- *   version 2.1 of the License, or (at your option) any later version.
- *
- *   This library is distributed in the hope that it will be useful,
+ *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- *   Lesser General Public License for more details.
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
  *
- *   You should have received a copy of the GNU Lesser General Public
- *   License along with this library; if not, write to the Free Software
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
- *
- *  Copyright 2007  The FreeRADIUS server project
- *  Copyright 2007  Alan DeKok <aland@ox.org>
  */
 
+/**
+ * @file lib/event.c
+ * @brief Non-thread-safe event handling, specific to a RADIUS server.
+ *
+ * @copyright 2007  The FreeRADIUS server project
+ * @copyright 2007  Alan DeKok <aland@ox.org>
+ */
 RCSID("$Id$")
 
 #include <freeradius-devel/libradius.h>
@@ -362,7 +361,7 @@ int fr_event_fd_insert(fr_event_list_t *el, int type, int fd,
 	/*
 	 *	We need to store TWO fields with the event.  kqueue
 	 *	only lets us store one.  If we put the two fields into
-	 *	a malloc'd structure, that would help.  Except that
+	 *	a heap allocated structure, that would help.  Except that
 	 *	kqueue can silently delete the event when the socket
 	 *	is closed, and not give us the opportunity to free it.
 	 *	<sigh>

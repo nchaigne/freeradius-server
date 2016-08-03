@@ -54,15 +54,15 @@ static CONF_PARSER module_config[] = {
 
 	{ FR_CONF_OFFSET("inner_eap_module", PW_TYPE_STRING, rlm_eap_peap_t, inner_eap_module), },
 
-	{ FR_CONF_OFFSET("copy_request_to_tunnel", PW_TYPE_BOOLEAN, rlm_eap_peap_t, copy_request_to_tunnel), .dflt = "no" },
+	{ FR_CONF_DEPRECATED("copy_request_to_tunnel", PW_TYPE_BOOLEAN, rlm_eap_peap_t, NULL), .dflt = "no" },
 
-	{ FR_CONF_OFFSET("use_tunneled_reply", PW_TYPE_BOOLEAN, rlm_eap_peap_t, use_tunneled_reply), .dflt = "no" },
+	{ FR_CONF_DEPRECATED("use_tunneled_reply", PW_TYPE_BOOLEAN, rlm_eap_peap_t, NULL), .dflt = "no" },
 
 #ifdef WITH_PROXY
 	{ FR_CONF_OFFSET("proxy_tunneled_request_as_eap", PW_TYPE_BOOLEAN, rlm_eap_peap_t, proxy_tunneled_request_as_eap), .dflt = "yes" },
 #endif
 
-	{ FR_CONF_OFFSET("virtual_server", PW_TYPE_STRING, rlm_eap_peap_t, virtual_server) },
+	{ FR_CONF_OFFSET("virtual_server", PW_TYPE_STRING | PW_TYPE_REQUIRED | PW_TYPE_NOT_EMPTY, rlm_eap_peap_t, virtual_server) },
 
 	{ FR_CONF_OFFSET("soh", PW_TYPE_BOOLEAN, rlm_eap_peap_t, soh), .dflt = "no" },
 
@@ -88,11 +88,6 @@ static int mod_instantiate(CONF_SECTION *cs, void **instance)
 	 *	Parse the configuration attributes.
 	 */
 	if (cf_section_parse(cs, inst, module_config) < 0) return -1;
-
-	if (!inst->virtual_server) {
-		ERROR("A 'virtual_server' MUST be defined for security");
-		return -1;
-	}
 
 	if (!cf_section_sub_find_name2(main_config.config, "server", inst->virtual_server)) {
 		cf_log_err_by_name(cs, "virtual_server", "Unknown virtual server '%s'", inst->virtual_server);
@@ -142,8 +137,6 @@ static peap_tunnel_t *peap_alloc(TALLOC_CTX *ctx, rlm_eap_peap_t *inst)
 
 	t = talloc_zero(ctx, peap_tunnel_t);
 
-	t->copy_request_to_tunnel = inst->copy_request_to_tunnel;
-	t->use_tunneled_reply = inst->use_tunneled_reply;
 #ifdef WITH_PROXY
 	t->proxy_tunneled_request_as_eap = inst->proxy_tunneled_request_as_eap;
 #endif
@@ -316,26 +309,6 @@ static int mod_process(void *arg, eap_session_t *eap_session)
 		return 1;
 
 	case RLM_MODULE_OK:
-		/*
-		 *	Move the saved VP's from the Access-Accept to
-		 *	our Access-Accept.
-		 */
-		peap = tls_session->opaque;
-		if (peap->soh_reply_vps) {
-			RDEBUG2("Using saved attributes from the SoH reply");
-			rdebug_pair_list(L_DBG_LVL_2, request, peap->soh_reply_vps, NULL);
-			fr_pair_list_mcopy_by_num(eap_session->request->reply, &eap_session->request->reply->vps,
-						  &peap->soh_reply_vps, 0, 0, TAG_ANY);
-		}
-		if (peap->accept_vps) {
-			RDEBUG2("Using saved attributes from the original Access-Accept");
-			rdebug_pair_list(L_DBG_LVL_2, request, peap->accept_vps, NULL);
-			fr_pair_list_mcopy_by_num(eap_session->request->reply, &eap_session->request->reply->vps,
-						  &peap->accept_vps, 0, 0, TAG_ANY);
-		} else if (peap->use_tunneled_reply) {
-			RDEBUG2("No saved attributes in the original Access-Accept");
-		}
-
 		/*
 		 *	Success: Automatically return MPPE keys.
 		 */

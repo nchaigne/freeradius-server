@@ -215,7 +215,7 @@ struct ldap_instance {
 	CONF_SECTION	*cs;				//!< Main configuration section for this instance.
 	fr_connection_pool_t *pool;			//!< Connection pool instance.
 
-	char const	*config_server;			//!< Server set in the config.
+	char const	**config_server;		//!< Server set in the config.
 	char		*server;			//!< Initial server to bind to.
 	uint16_t	port;				//!< Port to use when binding to the server.
 
@@ -461,6 +461,9 @@ extern FR_NAME_NUMBER const ldap_tls_require_cert[];
 /*
  *	ldap.c - Wrappers arounds OpenLDAP functions.
  */
+void	rlm_ldap_timeout_debug(rlm_ldap_t const *inst, REQUEST *request, ldap_handle_t const *conn,
+			       struct timeval const *timeout, char const *prefix);
+
 size_t rlm_ldap_escape_func(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg);
 
 size_t rlm_ldap_unescape_func(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg);
@@ -472,7 +475,7 @@ size_t rlm_ldap_normalise_dn(char *out, char const *in);
 ssize_t rlm_ldap_xlat_filter(REQUEST *request, char const **sub, size_t sublen, char *out, size_t outlen);
 
 ldap_rcode_t rlm_ldap_bind(rlm_ldap_t const *inst, REQUEST *request, ldap_handle_t **pconn, char const *dn,
-			   char const *password, ldap_sasl *sasl, bool retry,
+			   char const *password, ldap_sasl *sasl, bool retry, struct timeval const *timeout,
 			   LDAPControl **serverctrls, LDAPControl **clientctrls);
 
 char const *rlm_ldap_error_str(ldap_handle_t const *conn);
@@ -498,6 +501,7 @@ void rlm_ldap_check_reply(rlm_ldap_t const *inst, REQUEST *request);
  *	ldap.c - Callbacks for the connection pool API.
  */
 ldap_rcode_t rlm_ldap_result(rlm_ldap_t const *inst, ldap_handle_t const *conn, int msgid, char const *dn,
+			     struct timeval const *timeout,
 			     LDAPMessage **result, char const **error, char **extra);
 
 char *rlm_ldap_berval_to_string(TALLOC_CTX *ctx, struct berval const *in);
@@ -581,5 +585,6 @@ ldap_rcode_t rlm_ldap_sasl_interactive(rlm_ldap_t const *inst, REQUEST *request,
 				       ldap_handle_t *pconn, char const *dn,
 				       char const *password, ldap_sasl *sasl,
 				       LDAPControl **serverctrls, LDAPControl **clientctrls,
+				       struct timeval const *timeout,
 				       char const **error, char **error_extra);
 #endif

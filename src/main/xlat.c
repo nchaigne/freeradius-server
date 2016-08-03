@@ -432,14 +432,10 @@ static ssize_t xlat_debug_attr(UNUSED char **out, UNUSED size_t outlen,
 			switch (type->number) {
 			case PW_TYPE_INVALID:		/* Not real type */
 			case PW_TYPE_MAX:		/* Not real type */
-			case PW_TYPE_EXTENDED:		/* Not safe/appropriate */
-			case PW_TYPE_LONG_EXTENDED:	/* Not safe/appropriate */
-			case PW_TYPE_TLV:		/* Not safe/appropriate */
-			case PW_TYPE_EVS:		/* Not safe/appropriate */
-			case PW_TYPE_VSA:		/* @fixme We need special behaviour for these */
 			case PW_TYPE_COMBO_IP_ADDR:	/* Covered by IPv4 address IPv6 address */
 			case PW_TYPE_COMBO_IP_PREFIX:	/* Covered by IPv4 address IPv6 address */
 			case PW_TYPE_TIMEVAL:		/* Not a VALUE_PAIR type */
+			case PW_TYPE_STRUCTURAL:
 				goto next_type;
 
 			default:
@@ -573,10 +569,9 @@ static ssize_t xlat_string(char **out, size_t outlen,
 			   UNUSED void const *mod_inst, UNUSED void const *xlat_inst,
 			   REQUEST *request, char const *fmt)
 {
-	size_t len;
 	ssize_t ret;
 	VALUE_PAIR *vp;
-	uint8_t const *p;
+	uint8_t buffer[64];
 
 	while (isspace((int) *fmt)) fmt++;
 
@@ -587,30 +582,30 @@ static ssize_t xlat_string(char **out, size_t outlen,
 
 	if ((radius_get_vp(&vp, request, fmt) < 0) || !vp) goto nothing;
 
-	ret = fr_radius_encode_value_hton(&p, vp);
-	if (ret < 0) {
-		return ret;
-	}
-
+	/*
+	 *	These are printed specially.
+	 */
 	switch (vp->da->type) {
 	case PW_TYPE_OCTETS:
-		len = fr_snprint(*out, outlen, (char const *) p, vp->vp_length, '"');
-		break;
+		return fr_snprint(*out, outlen, (char const *) vp->vp_octets, vp->vp_length, '"');
 
 		/*
 		 *	Note that "%{string:...}" is NOT binary safe!
 		 *	It is explicitly used to get rid of embedded zeros.
 		 */
 	case PW_TYPE_STRING:
-		len = strlcpy(*out, vp->vp_strvalue, outlen);
-		break;
-
+		return strlcpy(*out, vp->vp_strvalue, outlen);
+		
 	default:
-		len = fr_snprint(*out, outlen, (char const *) p, ret, '\0');
 		break;
 	}
 
-	return len;
+	ret = fr_radius_encode_value_hton(buffer, sizeof(buffer), vp);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return fr_snprint(*out, outlen, (char const *) buffer, ret, '\0');
 }
 
 /** xlat expand string attribute value
@@ -1117,43 +1112,6 @@ bool xlat_register_redundant(CONF_SECTION *cs)
 }
 
 
-/** Crappy temporary function to add attribute ref support to xlats
- *
- * This needs to die, and hopefully will die, when xlat functions accept
- * xlat node structures.
- *
- * Provides either a pointer to a buffer which contains the value of the reference VALUE_PAIR
- * in an architecture independent format. Or a pointer to the start of the fmt string.
- *
- * The pointer is only guaranteed to be valid between calls to xlat_fmt_to_ref,
- * and so long as the source VALUE_PAIR is not freed.
- *
- * @param out where to write a pointer to the buffer to the data the xlat function needs to work on.
- * @param request current request.
- * @param fmt string.
- * @returns
- *	- The length of the data.
- *	- -1 on failure.
- */
-ssize_t xlat_fmt_to_ref(uint8_t const **out, REQUEST *request, char const *fmt)
-{
-	VALUE_PAIR *vp;
-
-	while (isspace((int) *fmt)) fmt++;
-
-	if (fmt[0] == '&') {
-		if ((radius_get_vp(&vp, request, fmt) < 0) || !vp) {
-			*out = NULL;
-			return -1;
-		}
-
-		return fr_radius_encode_value_hton(out, vp);
-	}
-
-	*out = (uint8_t const *)fmt;
-	return strlen(fmt);
-}
-
 /** De-register all xlat functions, used mainly for debugging.
  *
  */
@@ -1354,7 +1312,7 @@ static ssize_t xlat_tokenize_expansion(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **
 
 			return p - fmt;
 		}
-		*q = ':';	/* Avoids a strdup */
+		*q = ':';	/* Avoids a talloc_strdup */
 	}
 
 	/*
@@ -1505,11 +1463,11 @@ static ssize_t xlat_tokenize_literal(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **he
 			ssize_t slen;
 			xlat_exp_t *next;
 
-			if (!p[1] || !strchr("%}dlmntDGHISTYv", p[1])) {
+			if (!p[1] || !strchr("%}dlmnsetDGHIMSTYv", p[1])) {
 				talloc_free(node);
 				*error = "Invalid variable expansion";
 				p++;
-				return - (p - fmt);
+				return -(p - fmt);
 			}
 
 			next = talloc_zero(node, xlat_exp_t);
@@ -1946,7 +1904,7 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, vp_tmpl_t const *vpt,
 	packet = radius_packet(request, vpt->tmpl_list);
 	if (!packet) {
 		if (return_null) return NULL;
-		return fr_pair_type_snprint(ctx, vpt->tmpl_da->type);
+		return fr_pair_type_asprint(ctx, vpt->tmpl_da->type);
 	}
 
 	vp = NULL;
@@ -2135,7 +2093,7 @@ do_print:
 
 	if (!vp) {
 		if (return_null) return NULL;
-		return fr_pair_type_snprint(ctx, vpt->tmpl_da->type);
+		return fr_pair_type_asprint(ctx, vpt->tmpl_da->type);
 	}
 
 print:
@@ -2176,6 +2134,7 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 		size_t freespace = 256;
 		struct tm ts;
 		time_t when;
+		long int microseconds;
 
 		XLAT_DEBUG("xlat_aprint PERCENT");
 
@@ -2183,8 +2142,10 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 		p = node->fmt;
 
 		when = request->timestamp.tv_sec;
+		microseconds = request->timestamp.tv_usec;
 		if (request->packet) {
 			when = request->packet->timestamp.tv_sec;
+			microseconds = request->packet->timestamp.tv_usec;
 		}
 
 		switch (*p) {
@@ -2209,7 +2170,16 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 			break;
 
 		case 'n': /* Request Number*/
-			snprintf(str, freespace, "%u", request->number);
+			snprintf(str, freespace, "%" PRIu64 , request->number);
+			break;
+
+		case 's': /* First request in this sequence */
+			snprintf(str, freespace, "%" PRIu64 , request->seq_start);
+			break;
+
+		case 'e': /* Request second */
+			if (!localtime_r(&when, &ts)) goto error;
+			strftime(str, freespace, "%S", &ts);
 			break;
 
 		case 't': /* request timestamp */
@@ -2237,6 +2207,10 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 			if (request->packet) {
 				snprintf(str, freespace, "%i", request->packet->id);
 			}
+			break;
+
+		case 'M': /* Request microsecond */
+			snprintf(str, freespace, "%06ld", microseconds);
 			break;
 
 		case 'S': /* request timestamp in SQL format*/
@@ -2548,7 +2522,7 @@ static ssize_t xlat_expand_struct(char **out, size_t outlen, REQUEST *request, x
 	}
 
 	/*
-	 *	Otherwise copy the malloced buffer to the fixed one.
+	 *	Otherwise copy the talloced buffer to the fixed one.
 	 */
 	strlcpy(*out, buff, outlen);
 	talloc_free(buff);

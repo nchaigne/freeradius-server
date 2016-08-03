@@ -93,6 +93,24 @@ static inline void exfile_trigger_exec(exfile_t *ef, REQUEST *request, exfile_en
 	talloc_free(vp);
 }
 
+
+static void exfile_cleanup_entry(exfile_t *ef, REQUEST *request, exfile_entry_t *entry)
+{
+	TALLOC_FREE(entry->filename);
+
+	close(entry->fd);
+
+	entry->hash = 0;
+	entry->fd = -1;
+	entry->dup = -1;
+
+	/*
+	 *	Issue close trigger *after* we've closed the fd
+	 */
+	exfile_trigger_exec(ef, request, entry, "close");
+}
+
+
 static int _exfile_free(exfile_t *ef)
 {
 	uint32_t i;
@@ -102,12 +120,7 @@ static int _exfile_free(exfile_t *ef)
 	for (i = 0; i < ef->max_entries; i++) {
 		if (!ef->entries[i].filename) continue;
 
-		close(ef->entries[i].fd);
-
-		/*
-		 *	Issue close trigger *after* we've closed the fd
-		 */
-		exfile_trigger_exec(ef, NULL, &ef->entries[i], "close");
+		exfile_cleanup_entry(ef, NULL, &ef->entries[i]);
 	}
 
 	pthread_mutex_unlock(&ef->mutex);
@@ -180,6 +193,7 @@ void exfile_enable_triggers(exfile_t *ef, CONF_SECTION *conf, char const *trigge
 	MEM(ef->trigger_args = fr_pair_list_copy(ef, trigger_args));
 }
 
+
 /** Open a new log file, or maybe an existing one.
  *
  * When multithreaded, the FD is locked via a mutex.  This way we're
@@ -196,7 +210,8 @@ void exfile_enable_triggers(exfile_t *ef, CONF_SECTION *conf, char const *trigge
  */
 int exfile_open(exfile_t *ef, REQUEST *request, char const *filename, mode_t permissions, bool append)
 {
-	int i, tries, unused = -1, found = -1;
+	int i, tries, unused = -1, found = -1, oldest = -1;
+	bool do_cleanup = false;
 	uint32_t hash;
 	time_t now = time(NULL);
 	struct stat st;
@@ -208,8 +223,13 @@ int exfile_open(exfile_t *ef, REQUEST *request, char const *filename, mode_t per
 
 	pthread_mutex_lock(&ef->mutex);
 
+	if (now > (ef->last_cleaned + 1)) do_cleanup = true;
+
 	/*
 	 *	Find the matching entry, or an unused one.
+	 *
+	 *	Also track which entry is the oldest, in case there
+	 *	are no unused entries.
 	 */
 	for (i = 0; i < (int) ef->max_entries; i++) {
 		if (!ef->entries[i].filename) {
@@ -217,50 +237,43 @@ int exfile_open(exfile_t *ef, REQUEST *request, char const *filename, mode_t per
 			continue;
 		}
 
-		if (ef->entries[i].hash != hash) continue;
+		if ((oldest < 0) ||
+		    (ef->entries[i].last_used < ef->entries[oldest].last_used)) {
+			oldest = i;
+		}
 
 		/*
-		 *	Same hash but different filename.  Give up.
+		 *	Hash comparisons are fast.  String comparisons are slow.
+		 *
+		 *	But we still need to do string comparisons if
+		 *	the hash matches, because 1/2^16 filenames
+		 *	will result in a hash collision.  And that's
+		 *	enough filenames in a long-running server to
+		 *	ensure that it happens.
 		 */
-		if (strcmp(ef->entries[i].filename, filename) != 0) {
-			pthread_mutex_unlock(&ef->mutex);
-			return -1;
-		}
+		if ((found < 0) &&
+		    (ef->entries[i].hash == hash) &&
+		    (strcmp(ef->entries[i].filename, filename) == 0)) {
+			found = i;
 
-		found = i;
-		break;
-	}
+			/*
+			 *	If we're not cleanin up, stop now.
+			 */
+			if (!do_cleanup) break;
 
-	/*
-	 *	Clean up old entries.
-	 */
-	if (now > (ef->last_cleaned + 1)) {
-		ef->last_cleaned = now;
-
-		for (i = 0; i < (int) ef->max_entries; i++) {
-			if (i == found) continue;	/* Don't cleanup the one we're opening */
-
-			if (!ef->entries[i].filename) continue;
-
+			/*
+			 *	If we are cleaning up, and only
+			 *	entries OTHER than the one we found,
+			 *	do so now.
+			 */
+		} else if (do_cleanup) {
 			if ((ef->entries[i].last_used + ef->max_idle) >= now) continue;
 
-			close(ef->entries[i].fd);
-
-			/*
-			 *	Issue close trigger *after* we've closed the fd
-			 */
-			exfile_trigger_exec(ef, request, &ef->entries[i], "close");
-
-			/*
-			 *	This will block forever if a thread is
-			 *	doing something stupid.
-			 */
-			TALLOC_FREE(ef->entries[i].filename);
-			ef->entries[i].hash = 0;
-			ef->entries[i].fd = -1;
-			ef->entries[i].dup = -1;
+			exfile_cleanup_entry(ef, request, &ef->entries[i]);
 		}
 	}
+
+	if (do_cleanup) ef->last_cleaned = now;
 
 	/*
 	 *	We found an existing entry, return that
@@ -271,12 +284,11 @@ int exfile_open(exfile_t *ef, REQUEST *request, char const *filename, mode_t per
 	}
 
 	/*
-	 *	Find an unused entry
+	 *	There are no unused entries, free the oldest one.
 	 */
 	if (unused < 0) {
-		fr_strerror_printf("Too many different filenames");
-		pthread_mutex_unlock(&(ef->mutex));
-		return -1;
+		exfile_cleanup_entry(ef, request, &ef->entries[oldest]);
+		unused = oldest;
 	}
 
 	/*
@@ -344,11 +356,7 @@ do_return:
 		fr_strerror_printf("Failed to seek in file %s: %s", filename, strerror(errno));
 
 	error:
-		ef->entries[i].hash = 0;
-		TALLOC_FREE(ef->entries[i].filename);
-		close(ef->entries[i].fd);
-		ef->entries[i].fd = -1;
-		ef->entries[i].dup = -1;
+		exfile_cleanup_entry(ef, request, &ef->entries[i]);
 
 		pthread_mutex_unlock(&(ef->mutex));
 		return -1;

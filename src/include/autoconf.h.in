@@ -51,6 +51,9 @@
 /* Define if the compiler supports __builtin_types_compatible_p */
 #undef HAVE_BUILTIN_TYPES_COMPATIBLE_P
 
+/* Define if the compiler supports the C11 _Generic construct */
+#undef HAVE_C11_GENERIC
+
 /* Define to 1 if you have the <sys/capability.h> header file. */
 #undef HAVE_CAPABILITY_H
 
@@ -391,6 +394,12 @@
 
 /* Define to 1 if you have the `SSL_get_client_random' function. */
 #undef HAVE_SSL_GET_CLIENT_RANDOM
+
+/* Define to 1 if you have the `SSL_get_server_random' function. */
+#undef HAVE_SSL_GET_SERVER_RANDOM
+
+/* Define to 1 if you have the <stdatomic.h> header file. */
+#undef HAVE_STDATOMIC_H
 
 /* Define to 1 if you have the <stdbool.h> header file. */
 #undef HAVE_STDBOOL_H

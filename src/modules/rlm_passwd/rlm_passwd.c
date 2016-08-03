@@ -51,8 +51,6 @@ struct hashtable {
 
 #ifdef TEST
 
-#define rad_malloc(s) malloc(s)
-
 void printpw(struct mypasswd *pw, int nfields){
 	int i;
 	if (pw) {
@@ -65,16 +63,16 @@ void printpw(struct mypasswd *pw, int nfields){
 #endif
 
 
-static struct mypasswd * mypasswd_malloc(char const* buffer, int nfields, size_t* len)
+static struct mypasswd *mypasswd_alloc(char const* buffer, int nfields, size_t* len)
 {
 	struct mypasswd *t;
 	/* reserve memory for (struct mypasswd) + listflag (nfields * sizeof (char*)) +
 	** fields (nfields * sizeof (char)) + strlen (inst->format) + 1 */
 
-	*len=sizeof (struct mypasswd) + nfields * sizeof (char*) + nfields * sizeof (char ) + strlen(buffer) + 1;
-	t = (struct mypasswd *) rad_malloc(*len);
-	if (t) memset(t, 0, *len);
-	return (t);
+	*len = sizeof(struct mypasswd) + nfields * sizeof (char*) + nfields * sizeof (char ) + strlen(buffer) + 1;
+	MEM(t = (struct mypasswd *)talloc_zero_array(NULL, uint8_t, *len));
+
+	return t;
 }
 
 static int string_to_entry(char const* string, int nfields, char delimiter,
@@ -116,9 +114,10 @@ static int string_to_entry(char const* string, int nfields, char delimiter,
 static void destroy_password (struct mypasswd * pass)
 {
 	struct mypasswd *p;
-	while ((p=pass)!=NULL) {
+
+	while ((p = pass) != NULL) {
 		pass = pass->next;
-		free(p);
+		talloc_free(p);
 	}
 }
 
@@ -139,10 +138,6 @@ static void release_hash_table(struct hashtable * ht){
 	for (i = 0; i < ht->tablesize; i++)
 		if (ht->table[i])
 			destroy_password(ht->table[i]);
-	if (ht->table) {
-		free(ht->table);
-		ht->table = NULL;
-	}
 	if (ht->fp) {
 		fclose(ht->fp);
 		ht->fp = NULL;
@@ -153,11 +148,7 @@ static void release_hash_table(struct hashtable * ht){
 static void release_ht(struct hashtable * ht){
 	if (!ht) return;
 	release_hash_table(ht);
-	if (ht->filename) {
-		free(ht->filename);
-		ht->filename = NULL;
-	}
-	free(ht);
+	talloc_free(ht);
 }
 
 static struct hashtable * build_hash_table (char const * file, int nfields,
@@ -172,27 +163,20 @@ static struct hashtable * build_hash_table (char const * file, int nfields,
 	int i;
 	char buffer[1024];
 
-	ht = (struct hashtable *) rad_malloc(sizeof(struct hashtable));
-	if(!ht) {
-		return NULL;
-	}
-	memset(ht, 0, sizeof(struct hashtable));
-	ht->filename = strdup(file);
-	if(!ht->filename) {
-		free(ht);
-		return NULL;
-	}
+	MEM(ht = talloc_zero(NULL, struct hashtable));
+	MEM(ht->filename = talloc_typed_strdup(ht, file));
+
 	ht->tablesize = tablesize;
 	ht->nfields = nfields;
 	ht->keyfield = keyfield;
 	ht->islist = islist;
 	ht->ignorenis = ignorenis;
+
 	if (delimiter) ht->delimiter = delimiter;
 	else ht->delimiter = ':';
 	if(!tablesize) return ht;
 	if(!(ht->fp = fopen(file,"r"))) {
-		free(ht->filename);
-		free(ht);
+		talloc_free(ht);
 		return NULL;
 	}
 
@@ -202,25 +186,16 @@ static struct hashtable * build_hash_table (char const * file, int nfields,
 	 *	which are already in the server core.
 	 */
 	memset(ht->buffer, 0, 1024);
-	ht->table = (struct mypasswd **) rad_malloc (tablesize * sizeof(struct mypasswd *));
-	if (!ht->table) {
-		/*
-		 * Unable allocate memory for hash table
-		 * Still work without it
-		 */
-		ht->tablesize = 0;
-		return ht;
-	}
-	memset(ht->table, 0, tablesize * sizeof(struct mypasswd *));
+	MEM(ht->table = talloc_zero_array(ht, struct mypasswd *, tablesize));
 	while (fgets(buffer, 1024, ht->fp)) {
 		if(*buffer && *buffer!='\n' && (!ignorenis || (*buffer != '+' && *buffer != '-')) ){
-			if(!(hashentry = mypasswd_malloc(buffer, nfields, &len))){
+			if(!(hashentry = mypasswd_alloc(buffer, nfields, &len))){
 				release_hash_table(ht);
 				return ht;
 			}
 			len = string_to_entry(buffer, nfields, ht->delimiter, hashentry, len);
 			if(!hashentry->field[keyfield] || *hashentry->field[keyfield] == '\0') {
-				free(hashentry);
+				talloc_free(hashentry);
 				continue;
 			}
 
@@ -238,7 +213,7 @@ static struct hashtable * build_hash_table (char const * file, int nfields,
 					for (nextlist = list; *nextlist && *nextlist!=','; nextlist++);
 					if (*nextlist) *nextlist++ = 0;
 					else nextlist = 0;
-					if(!(hashentry1 = mypasswd_malloc("", nfields, &len))){
+					if(!(hashentry1 = mypasswd_alloc("", nfields, &len))){
 						release_hash_table(ht);
 						return ht;
 					}
@@ -422,11 +397,12 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	}
 
 	lf = talloc_typed_strdup(inst, inst->format);
-	if ( !lf) {
+	if (!lf) {
 		ERROR("Memory allocation failed for lf");
 		return -1;
 	}
 	memset(lf, 0, strlen(inst->format));
+
 	s = inst->format - 1;
 	do {
 		if(s == inst->format - 1 || *s == ':'){
@@ -459,7 +435,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		ERROR("Can't build hashtable from passwd file");
 		return -1;
 	}
-	if (! (inst->pwdfmt = mypasswd_malloc(inst->format, nfields, &len)) ){
+	if (! (inst->pwdfmt = mypasswd_alloc(inst->format, nfields, &len)) ){
 		ERROR("Memory allocation failed");
 		release_ht(inst->ht);
 		inst->ht = NULL;
@@ -513,7 +489,7 @@ static int mod_detach (void *instance) {
 		release_ht(inst->ht);
 		inst->ht = NULL;
 	}
-	free(inst->pwdfmt);
+	talloc_free(inst->pwdfmt);
 	return 0;
 #undef inst
 }

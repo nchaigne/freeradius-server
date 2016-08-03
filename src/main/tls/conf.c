@@ -43,6 +43,12 @@ static CONF_PARSER cache_config[] = {
 	{ FR_CONF_OFFSET("virtual_server", PW_TYPE_STRING, fr_tls_conf_t, session_cache_server) },
 	{ FR_CONF_OFFSET("name", PW_TYPE_STRING, fr_tls_conf_t, session_id_name) },
 	{ FR_CONF_OFFSET("lifetime", PW_TYPE_INTEGER, fr_tls_conf_t, session_cache_lifetime), .dflt = "86400" },
+	{ FR_CONF_OFFSET("verify", PW_TYPE_BOOLEAN, fr_tls_conf_t, session_cache_verify), .dflt = "no" },
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+	{ FR_CONF_OFFSET("require_extended_master_secret", PW_TYPE_BOOLEAN, fr_tls_conf_t, session_cache_require_extms), .dflt = "yes" },
+	{ FR_CONF_OFFSET("require_perfect_forward_secrecy", PW_TYPE_BOOLEAN, fr_tls_conf_t, session_cache_require_pfs), .dflt = "no" },
+#endif
 
 	{ FR_CONF_DEPRECATED("enable", PW_TYPE_BOOLEAN, fr_tls_conf_t, NULL) },
 	{ FR_CONF_DEPRECATED("max_entries", PW_TYPE_INTEGER, fr_tls_conf_t, NULL) },
@@ -59,15 +65,16 @@ static CONF_PARSER verify_config[] = {
 
 #ifdef HAVE_OPENSSL_OCSP_H
 static CONF_PARSER ocsp_config[] = {
-	{ FR_CONF_OFFSET("enable", PW_TYPE_BOOLEAN, fr_tls_conf_t, ocsp_enable), .dflt = "no" },
+	{ FR_CONF_OFFSET("enable", PW_TYPE_BOOLEAN, fr_tls_ocsp_conf_t, enable), .dflt = "no" },
 
-	{ FR_CONF_OFFSET("virtual_server", PW_TYPE_STRING, fr_tls_conf_t, ocsp_cache_server) },
+	{ FR_CONF_OFFSET("virtual_server", PW_TYPE_STRING, fr_tls_ocsp_conf_t, cache_server) },
 
-	{ FR_CONF_OFFSET("override_cert_url", PW_TYPE_BOOLEAN, fr_tls_conf_t, ocsp_override_url), .dflt = "no" },
-	{ FR_CONF_OFFSET("url", PW_TYPE_STRING, fr_tls_conf_t, ocsp_url) },
-	{ FR_CONF_OFFSET("use_nonce", PW_TYPE_BOOLEAN, fr_tls_conf_t, ocsp_use_nonce), .dflt = "yes" },
-	{ FR_CONF_OFFSET("timeout", PW_TYPE_INTEGER, fr_tls_conf_t, ocsp_timeout), .dflt = "yes" },
-	{ FR_CONF_OFFSET("softfail", PW_TYPE_BOOLEAN, fr_tls_conf_t, ocsp_softfail), .dflt = "no" },
+	{ FR_CONF_OFFSET("override_cert_url", PW_TYPE_BOOLEAN, fr_tls_ocsp_conf_t, override_url), .dflt = "no" },
+	{ FR_CONF_OFFSET("url", PW_TYPE_STRING, fr_tls_ocsp_conf_t, url) },
+	{ FR_CONF_OFFSET("use_nonce", PW_TYPE_BOOLEAN, fr_tls_ocsp_conf_t, use_nonce), .dflt = "yes" },
+	{ FR_CONF_OFFSET("timeout", PW_TYPE_INTEGER, fr_tls_ocsp_conf_t, timeout), .dflt = "yes" },
+	{ FR_CONF_OFFSET("softfail", PW_TYPE_BOOLEAN, fr_tls_ocsp_conf_t, softfail), .dflt = "no" },
+
 	CONF_PARSER_TERMINATOR
 };
 #endif
@@ -97,6 +104,9 @@ static CONF_PARSER tls_server_config[] = {
 	{ FR_CONF_OFFSET("allow_expired_crl", PW_TYPE_BOOLEAN, fr_tls_conf_t, allow_expired_crl) },
 	{ FR_CONF_OFFSET("check_cert_cn", PW_TYPE_STRING, fr_tls_conf_t, check_cert_cn) },
 	{ FR_CONF_OFFSET("cipher_list", PW_TYPE_STRING, fr_tls_conf_t, cipher_list) },
+#ifdef SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS
+	{ FR_CONF_OFFSET("allow_renegotiation", PW_TYPE_BOOLEAN, fr_tls_conf_t, allow_renegotiation), .dflt = "no" },
+#endif
 	{ FR_CONF_OFFSET("check_cert_issuer", PW_TYPE_STRING, fr_tls_conf_t, check_cert_issuer) },
 	{ FR_CONF_OFFSET("require_client_cert", PW_TYPE_BOOLEAN, fr_tls_conf_t, require_client_cert) },
 
@@ -123,7 +133,9 @@ static CONF_PARSER tls_server_config[] = {
 	{ FR_CONF_POINTER("verify", PW_TYPE_SUBSECTION, NULL), .subcs = (void const *) verify_config },
 
 #ifdef HAVE_OPENSSL_OCSP_H
-	{ FR_CONF_POINTER("ocsp", PW_TYPE_SUBSECTION, NULL), .subcs = (void const *) ocsp_config },
+	{ FR_CONF_OFFSET("ocsp", PW_TYPE_SUBSECTION, fr_tls_conf_t, ocsp), .subcs = (void const *) ocsp_config },
+
+	{ FR_CONF_OFFSET("staple", PW_TYPE_SUBSECTION, fr_tls_conf_t, staple), .subcs = (void const *) ocsp_config },
 #endif
 	CONF_PARSER_TERMINATOR
 };
@@ -165,10 +177,10 @@ static CONF_PARSER tls_client_config[] = {
 };
 
 #ifdef __APPLE__
-/** Use certadmin to retrieve the password for the private key
+/** Use cert_admin to retrieve the password for the private key
  *
  */
-static int conf_certadmin_password(fr_tls_conf_t *conf)
+static int conf_cert_admin_password(fr_tls_conf_t *conf)
 {
 	if (!conf->private_key_password) return 0;
 
@@ -177,7 +189,7 @@ static int conf_certadmin_password(fr_tls_conf_t *conf)
 	 *	for our special string which indicates we should get the password
 	 *	programmatically.
 	 */
-	char const *special_string = "Apple:UseCertAdmin";
+	char const *special_string = "Apple:UsecertAdmin";
 	if (strncmp(conf->private_key_password, special_string, strlen(special_string)) == 0) {
 		char cmd[256];
 		char *password;
@@ -261,8 +273,10 @@ static int _conf_server_free(fr_tls_conf_t *conf)
 	for (i = 0; i < conf->ctx_count; i++) SSL_CTX_free(conf->ctx[i]);
 
 #ifdef HAVE_OPENSSL_OCSP_H
-	if (conf->ocsp_store) X509_STORE_free(conf->ocsp_store);
-	conf->ocsp_store = NULL;
+	if (conf->ocsp.store) X509_STORE_free(conf->ocsp.store);
+	conf->ocsp.store = NULL;
+	if (conf->staple.store) X509_STORE_free(conf->staple.store);
+	conf->staple.store = NULL;
 #endif
 
 #ifndef NDEBUG
@@ -331,7 +345,7 @@ fr_tls_conf_t *tls_conf_parse_server(CONF_SECTION *cs)
 	}
 
 #ifdef __APPLE__
-	if (conf_certadmin_password(conf) < 0) goto error;
+	if (conf_cert_admin_password(conf) < 0) goto error;
 #endif
 
 	if (!main_config.spawn_workers) {
@@ -352,11 +366,23 @@ fr_tls_conf_t *tls_conf_parse_server(CONF_SECTION *cs)
 
 #ifdef HAVE_OPENSSL_OCSP_H
 	/*
+	 *	@fixme:  This is all pretty terrible.
+	 *	The stores initialized here are for validating
+	 *	OCSP responses.  They have nothing to do with
+	 *	verifying other certificates.
+	 */
+
+	/*
 	 * 	Initialize OCSP Revocation Store
 	 */
-	if (conf->ocsp_enable) {
-		conf->ocsp_store = conf_ocsp_revocation_store(conf);
-		if (conf->ocsp_store == NULL) goto error;
+	if (conf->ocsp.enable) {
+		conf->ocsp.store = conf_ocsp_revocation_store(conf);
+		if (conf->ocsp.store == NULL) goto error;
+	}
+
+	if (conf->staple.enable) {
+		conf->staple.store = conf_ocsp_revocation_store(conf);
+		if (conf->staple.store == NULL) goto error;
 	}
 #endif /*HAVE_OPENSSL_OCSP_H*/
 
@@ -379,9 +405,15 @@ fr_tls_conf_t *tls_conf_parse_server(CONF_SECTION *cs)
 		goto error;
 	}
 
-	if (conf->ocsp_cache_server &&
-	    !cf_section_sub_find_name2(main_config.config, "server", conf->ocsp_cache_server)) {
-		ERROR("No such virtual server '%s'", conf->ocsp_cache_server);
+	if (conf->ocsp.cache_server &&
+	    !cf_section_sub_find_name2(main_config.config, "server", conf->ocsp.cache_server)) {
+		ERROR("No such virtual server '%s'", conf->ocsp.cache_server);
+		goto error;
+	}
+
+	if (conf->staple.cache_server &&
+	    !cf_section_sub_find_name2(main_config.config, "server", conf->staple.cache_server)) {
+		ERROR("No such virtual server '%s'", conf->staple.cache_server);
 		goto error;
 	}
 
@@ -439,7 +471,7 @@ fr_tls_conf_t *tls_conf_parse_client(CONF_SECTION *cs)
 	}
 
 #ifdef __APPLE__
-	if (conf_certadmin_password(conf) < 0) goto error;
+	if (conf_cert_admin_password(conf) < 0) goto error;
 #endif
 
 	conf->ctx = talloc_array(conf, SSL_CTX *, conf->ctx_count);

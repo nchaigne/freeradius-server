@@ -225,6 +225,8 @@ typedef struct bfd_socket_t {
 	rbtree_t	*session_tree;
 } bfd_socket_t;
 
+extern fr_log_t debug_log;
+
 static int bfd_start_packets(bfd_state_t *session);
 static int bfd_start_control(bfd_state_t *session);
 static int bfd_stop_control(bfd_state_t *session);
@@ -1278,8 +1280,7 @@ static int bfd_process(bfd_state_t *session, bfd_packet_t *bfd)
 			case BFD_STATE_DOWN:
 				session->local_diag = BFD_NEIGHBOR_DOWN;
 
-				DEBUG("BFD %d State UP -> DOWN (neighbor down)",
-				      session->number);
+				DEBUG("BFD %d State UP -> DOWN (neighbor down)", session->number);
 				session->session_state = BFD_STATE_DOWN;
 				bfd_trigger(session);
 
@@ -1303,8 +1304,7 @@ static int bfd_process(bfd_state_t *session, bfd_packet_t *bfd)
 	if (session->remote_demand_mode &&
 	    (session->session_state == BFD_STATE_UP) &&
 	    (session->remote_session_state == BFD_STATE_UP)) {
-		DEBUG("BFD %d demand mode UP / UP, stopping packets",
-		      session->number);
+		DEBUG("BFD %d demand mode UP / UP, stopping packets", session->number);
 		bfd_stop_control(session);
 	}
 
@@ -1366,6 +1366,7 @@ static int bfd_process(bfd_state_t *session, bfd_packet_t *bfd)
 		if (rad_debug_lvl) {
 			request->log.lvl = RAD_REQUEST_LVL_DEBUG2;
 			request->log.func = vradlog_request;
+			request->log.output = &debug_log;
 		}
 		request->component = NULL;
 		request->module = NULL;

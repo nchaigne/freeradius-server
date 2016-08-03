@@ -1,5 +1,5 @@
 %bcond_with rlm_yubikey
-#%bcond_with experimental_modules
+%bcond_with experimental_modules
 
 # Many distributions have extremely old versions of OpenSSL
 # if you'd like to build with the FreeRADIUS openssl packages
@@ -702,6 +702,7 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-enabled/*
 # mysql
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/driver
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/mysql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/counter/mysql/*
@@ -719,6 +720,7 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mysql/*
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/ndb
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/ndb/*
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/driver/mysql
 # postgres
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/counter/postgresql/*
@@ -728,6 +730,7 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/postgresql/*
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/postgresql/*
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/driver/postgresql
 # sqlite
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/counter/sqlite/*
@@ -740,9 +743,11 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/sqlite/*
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/sqlite/*
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/driver/sqlite
 # cassandra
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/cassandra
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/cassandra/*
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/driver/cassandra
 # ruby
 %if %{?_with_rlm_ruby:1}%{!?_with_rlm_ruby:0}
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/ruby
@@ -863,5 +868,5 @@ fi
 
 
 %changelog
-* Wed Sep 22 2013 Alan DeKok <aland@freeradius.org> - 3.0.0
+* Wed Sep 25 2013 Alan DeKok <aland@freeradius.org> - 3.0.0
 - upgrade to latest upstream release

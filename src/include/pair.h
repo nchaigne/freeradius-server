@@ -171,6 +171,7 @@ typedef struct value_pair_raw {
 #define vp_ifid		data.ifid
 #define vp_ipv6addr	data.ipv6addr
 #define vp_ipv6prefix	data.ipv6prefix
+#define vp_bool		data.boolean
 #define vp_byte		data.byte
 #define vp_short	data.ushort
 #define vp_ether	data.ether
@@ -274,7 +275,7 @@ size_t    	fr_pair_value_snprint_json(char *out, size_t outlen, VALUE_PAIR const
 size_t		fr_pair_snprint(char *out, size_t outlen, VALUE_PAIR const *vp);
 void		fr_pair_fprint(FILE *, VALUE_PAIR const *vp);
 void		fr_pair_list_fprint(FILE *, VALUE_PAIR const *vp);
-char		*fr_pair_type_snprint(TALLOC_CTX *ctx, PW_TYPE type);
+char		*fr_pair_type_asprint(TALLOC_CTX *ctx, PW_TYPE type);
 char		*fr_pair_asprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote);
 
 /* Hacky raw pair thing that needs to go away */

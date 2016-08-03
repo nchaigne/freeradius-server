@@ -61,12 +61,17 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
  *	- 0 on success.
  *	- -1 on failure.
  */
-static int tls_cache_attrs(REQUEST *request, uint8_t *key, size_t key_len, tls_cache_action_t action)
+static int tls_cache_attrs(REQUEST *request,
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+			   uint8_t const *key,
+#else
+			   uint8_t *key,
+#endif
+			   size_t key_len, tls_cache_action_t action)
 {
 	VALUE_PAIR *vp;
 
 	fr_pair_delete_by_num(&request->packet->vps, 0, PW_TLS_SESSION_ID, TAG_ANY);
-	fr_pair_delete_by_num(&request->control, 0, PW_TLS_SESSION_CACHE_ACTION, TAG_ANY);
 
 	RDEBUG2("Setting TLS cache control attributes");
 	vp = fr_pair_afrom_num(request->packet, 0, PW_TLS_SESSION_ID);
@@ -78,14 +83,15 @@ static int tls_cache_attrs(REQUEST *request, uint8_t *key, size_t key_len, tls_c
 	rdebug_pair(L_DBG_LVL_2, request, vp, NULL);
 	REXDENT();
 
-	vp = fr_pair_afrom_num(request, 0, PW_TLS_SESSION_CACHE_ACTION);
+	vp = fr_pair_afrom_num(request, 0, PW_TLS_CACHE_ACTION);
 	if (!vp) return -1;
 
 	vp->vp_integer = action;
 	fr_pair_add(&request->control, vp);
 	RINDENT();
-	rdebug_pair(L_DBG_LVL_2, request, vp, "&config:");
+	rdebug_pair(L_DBG_LVL_2, request, vp, "&control:");
 	REXDENT();
+
 	return 0;
 }
 
@@ -99,6 +105,7 @@ static int tls_cache_attrs(REQUEST *request, uint8_t *key, size_t key_len, tls_c
 int tls_cache_process(REQUEST *request, char const *virtual_server, int autz_type)
 {
 	rlm_rcode_t rcode;
+	VALUE_PAIR *vp;
 
 	/*
 	 *	Save the current status of the request.
@@ -106,6 +113,19 @@ int tls_cache_process(REQUEST *request, char const *virtual_server, int autz_typ
 	char const *server = request->server;
 	char const *module = request->module;
 	char const *component = request->component;
+
+	/*
+	 *	Indicate what action we're performing
+	 */
+	vp = fr_pair_afrom_num(request, 0, PW_TLS_CACHE_ACTION);
+	if (!vp) return -1;
+
+	vp->vp_integer = autz_type;
+
+	fr_pair_add(&request->control, vp);
+	RINDENT();
+	rdebug_pair(L_DBG_LVL_2, request, vp, "&control:");
+	REXDENT();
 
 	/*
 	 *	Run it through the appropriate virtual server.
@@ -122,7 +142,7 @@ int tls_cache_process(REQUEST *request, char const *virtual_server, int autz_typ
 	request->module = module;
 	request->component = component;
 
-	fr_pair_delete_by_num(&request->control, 0, PW_TLS_SESSION_CACHE_ACTION, TAG_ANY);
+	fr_pair_delete_by_num(&request->control, 0, PW_TLS_CACHE_ACTION, TAG_ANY);
 
 	return rcode;
 }
@@ -260,9 +280,15 @@ error:
  *	- Deserialised session data on success.
  *	- NULL on error.
  */
-static SSL_SESSION *tls_cache_read(SSL *ssl, unsigned char *key, int key_len, int *copy)
+static SSL_SESSION *tls_cache_read(SSL *ssl,
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+				   unsigned char const *key,
+#else
+				   unsigned char *key,
+#endif
+				   int key_len, int *copy)
 {
-	fr_tls_conf_t	*conf;
+	fr_tls_conf_t		*conf;
 	REQUEST			*request;
 	unsigned char const	**p;
 	uint8_t const		*q;
@@ -309,6 +335,33 @@ static SSL_SESSION *tls_cache_read(SSL *ssl, unsigned char *key, int key_len, in
 	RDEBUG3("Read %zu bytes of session data.  Session deserialized successfully", vp->vp_length);
 
 	/*
+	 *	OpenSSL's API is very inconsistent.
+	 *
+	 *	We need to set external data here, so it can be
+	 *	retrieved in tls_cache_delete.
+	 *
+	 *	ex_data is not serialised in i2d_SSL_SESSION
+	 *	so we don't have to bother unsetting it.
+	 */
+	SSL_SESSION_set_ex_data(sess, FR_TLS_EX_INDEX_TLS_SESSION, SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_TLS_SESSION));
+
+	/*
+	 *	SSL_set_session increases the reference could
+	 *	on the session, so when OpenSSL attempts to
+	 *	free it, when setting our returned session
+	 *	it becomes a noop.
+	 *
+	 *	Spent many hours trying to find a better place
+	 *	to do validation than this, but it seems
+	 *	like this is the only way.
+	 */
+	SSL_set_session(ssl, sess);
+	if (tls_validate_client_cert_chain(ssl) != 1) {
+		RWDEBUG("Validation failed, forcefully expiring resumed session");
+		SSL_SESSION_set_timeout(sess, 0);
+	}
+
+	/*
 	 *	Ensure that the session data can't be used by anyone else.
 	 */
 	fr_pair_delete_by_num(&request->state, 0, PW_TLS_SESSION_DATA, TAG_ANY);
@@ -323,21 +376,15 @@ static SSL_SESSION *tls_cache_read(SSL *ssl, unsigned char *key, int key_len, in
  */
 static void tls_cache_delete(SSL_CTX *ctx, SSL_SESSION *sess)
 {
-	fr_tls_conf_t	*conf;
+	fr_tls_conf_t		*conf;
+	tls_session_t		*tls_session;
 	REQUEST			*request;
 	uint8_t			buffer[MAX_CACHE_ID_SIZE];
 	ssize_t			slen;
 
-	conf = SSL_CTX_get_app_data(ctx);
-
-	/*
-	 *	We need a fake request for the virtual server, but we
-	 *	don't have a parent request to base it on.  So just
-	 *	invent one.
-	 */
-	request = request_alloc(NULL);
-	request->packet = fr_radius_alloc(request, false);
-	request->reply = fr_radius_alloc(request, false);
+	conf = talloc_get_type_abort(SSL_CTX_get_app_data(ctx), fr_tls_conf_t);
+	tls_session = talloc_get_type_abort(SSL_SESSION_get_ex_data(sess, FR_TLS_EX_INDEX_TLS_SESSION), tls_session_t);
+	request = talloc_get_type_abort(SSL_get_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_REQUEST), REQUEST);
 
 	slen = tls_cache_id(buffer, sizeof(buffer), sess);
 	if (slen < 0) {
@@ -366,36 +413,67 @@ static void tls_cache_delete(SSL_CTX *ctx, SSL_SESSION *sess)
 		RWDEBUG("Failed deleting session data");
 		goto error;
 	}
-
-	/*
-	 *	Delete the fake request we created.
-	 */
-	talloc_free(request);
 }
 
-/** Allow a TLS session to be resumed in future
+/** Prevent a TLS session from being cached
  *
- * @param request	The current request.
- * @param session	on which to allow resumption.
- * @return
- *	- -1 on error (couldn't get fr_tls_server_conf struct from session)
- *	- 0 on success.
- *	- 1 if enabling session resumption was prevented administratively.
+ * Usually called if the session has failed for some reason.
+ *
+ * @param session on which to prevent resumption.
  */
-int tls_cache_allow(REQUEST *request, tls_session_t *session)
+void tls_cache_deny(tls_session_t *session)
 {
-	VALUE_PAIR		*vp;
-	fr_tls_conf_t	*conf;
+	/*
+	 *	Even for 1.1.0 we don't know when this function
+	 *	will be called, so better to remove the session
+	 *	directly.
+	 */
+	SSL_CTX_remove_session(session->ctx, session->ssl_session);
+}
 
-	conf = (fr_tls_conf_t *)SSL_get_ex_data(session->ssl, FR_TLS_EX_INDEX_CONF);
-#ifndef NDEBUG
-	rad_assert(conf != NULL);
-#else
-	if (!conf) {
-		REDEBUG("Failed retrieving TLS configuration from SSL session");
-		return -1;
+/** Prevent a TLS session from being resumed in future
+ *
+ * @note In OpenSSL > 1.1.0 this should not be called directly, but passed as a callback to
+ *	SSL_CTX_set_not_resumable_session_callback.
+ *
+ * @param ssl			The current OpenSSL session.
+ * @param is_forward_secure	Whether the cipher is forward secure, pass -1 if unknown.
+ * @return
+ *	- 0 on success.
+ *	- 1 if enabling session resumption was disabled for this session.
+ */
+int tls_cache_disable_cb(SSL *ssl,
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+			 UNUSED
+#endif
+			 int is_forward_secure)
+{
+	REQUEST			*request;
+
+	tls_session_t		*session;
+	VALUE_PAIR		*vp;
+
+	session = talloc_get_type_abort(SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_TLS_SESSION), tls_session_t);
+	request = talloc_get_type_abort(SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_REQUEST), REQUEST);
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+	{
+		fr_tls_conf_t *conf;
+
+		conf = talloc_get_type_abort(SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_CONF), fr_tls_conf_t);
+		if (conf->session_cache_require_extms && (SSL_get_extms_support(session->ssl) != 1)) {
+			RDEBUG2("Client does not support the Extended Master Secret extension, "
+				"disabling session resumption");
+			goto disable;
+		}
+
+		if (conf->session_cache_require_pfs && !is_forward_secure) {
+			RDEBUG2("Cipher suite is not forward secure, disabling session resumption");
+			goto disable;
+		}
 	}
 #endif
+
 	/*
 	 *	If there's no session resumption, delete the entry
 	 *	from the cache.  This means either it's disabled
@@ -405,47 +483,18 @@ int tls_cache_allow(REQUEST *request, tls_session_t *session)
 	 *	This also means you can't turn it on just for one
 	 *	user.
 	 */
-	if ((!session->allow_session_resumption) ||
-	    (((vp = fr_pair_find_by_num(request->control, 0, PW_ALLOW_SESSION_RESUMPTION, TAG_ANY)) != NULL) &&
-	     (vp->vp_integer == 0))) {
-		SSL_CTX_remove_session(session->ctx, session->ssl->session);
+	if (!session->allow_session_resumption) goto disable;
+
+	vp = fr_pair_find_by_num(request->control, 0, PW_ALLOW_SESSION_RESUMPTION, TAG_ANY);
+	if (vp && (vp->vp_integer == 0)) {
+		RDEBUG2("&control:Allow-Session-Resumption == no, disabling session resumption");
+	disable:
+		SSL_CTX_remove_session(session->ctx, session->ssl_session);
 		session->allow_session_resumption = false;
-
-		/*
-		 *	If we're in a resumed session and it's
-		 *	not allowed,
-		 */
-		if (SSL_session_reused(session->ssl)) {
-			REDEBUG("Forcibly stopping session resumption as it is not allowed");
-			return 1;
-		}
-
-	/*
-	 *	Else resumption IS allowed, so we store the
-	 *	user data in the cache.
-	 */
-	} else if (SSL_session_reused(session->ssl)) {
-		/*
-		 *	Mark the request as resumed.
-		 */
-		pair_make_request("EAP-Session-Resumed", "1", T_OP_SET);
+		return 1;
 	}
 
 	return 0;
-}
-
-/** Prevent a TLS session from being resumed
- *
- * Usually called if the session has failed for some reason.
- *
- * @param session on which to prevent resumption.
- */
-void tls_cache_deny(tls_session_t *session)
-{
-	/*
-	 *	Force the session to NOT be cached.
-	 */
-	SSL_CTX_remove_session(session->ctx, session->ssl->session);
 }
 
 /** Sets callbacks on a SSL_CTX to enable/disable session resumption
@@ -474,6 +523,10 @@ void tls_cache_init(SSL_CTX *ctx, bool enabled, char const *session_context, uin
 
 	SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL);
 	SSL_CTX_set_timeout(ctx, lifetime);
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+	SSL_CTX_set_not_resumable_session_callback(ctx, tls_cache_disable_cb);
+#endif
 
 	/*
 	 *	This sets the context sessions can be resumed in.

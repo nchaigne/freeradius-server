@@ -102,13 +102,13 @@ ssize_t udp_send(int sockfd, void *data, size_t data_len, int flags,
  *
  * @param[in] sockfd we're reading from.
  */
-void udp_recv_discard(int sockfd)
+int udp_recv_discard(int sockfd)
 {
 	uint8_t			data[4];
 	struct sockaddr_storage	src;
 	socklen_t		sizeof_src = sizeof(src);
 
-	(void) recvfrom(sockfd, data, sizeof(data), 0,
+	return recvfrom(sockfd, data, sizeof(data), 0,
 			(struct sockaddr *)&src, &sizeof_src);
 }
 
@@ -176,7 +176,7 @@ ssize_t udp_recv_peek(int sockfd, void *data, size_t data_len, int flags, fr_ipa
  */
 ssize_t udp_recv(int sockfd, void *data, size_t data_len, int flags,
 		 fr_ipaddr_t *src_ipaddr, uint16_t *src_port,
-		 fr_ipaddr_t *dst_ipaddr, uint16_t *dst_port, UDP_UNUSED int *if_index,
+		 fr_ipaddr_t *dst_ipaddr, uint16_t *dst_port, int *if_index,
 		 struct timeval *when)
 {
 	int			sock_flags = 0;

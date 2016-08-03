@@ -27,9 +27,9 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 
 #include "eap_tls.h"
 #include <openssl/hmac.h>
+#include <freeradius-devel/sha1.h>
 
 
-#if OPENSSL_VERSION_NUMBER < 0x10001000L
 /*
  * TLS PRF from RFC 2246
  */
@@ -82,6 +82,49 @@ static void P_hash(EVP_MD const *evp_md,
 	memset(a, 0, sizeof(a));
 }
 
+/*  EAP-FAST Pseudo-Random Function (T-PRF): RFC 4851, Section 5.5 */
+void T_PRF(unsigned char const *secret, unsigned int secret_len,
+	   char const *prf_label,
+	   unsigned char const *seed,  unsigned int seed_len,
+	   unsigned char *out, unsigned int out_len)
+{
+	size_t prf_size = strlen(prf_label);
+	size_t pos;
+	uint8_t	*buf;
+
+	if (prf_size > 128) prf_size = 128;
+	prf_size++;	/* include trailing zero */
+
+	buf = talloc_size(NULL, SHA1_DIGEST_LENGTH + prf_size + seed_len + 2 + 1);
+
+	memcpy(buf + SHA1_DIGEST_LENGTH, prf_label, prf_size);
+	if (seed) memcpy(buf + SHA1_DIGEST_LENGTH + prf_size, seed, seed_len);
+	*(uint16_t *)&buf[SHA1_DIGEST_LENGTH + prf_size + seed_len] = htons(out_len);
+	buf[SHA1_DIGEST_LENGTH + prf_size + seed_len + 2] = 1;
+
+	// T1 is just the seed
+	fr_hmac_sha1(buf, buf + SHA1_DIGEST_LENGTH, prf_size + seed_len + 2 + 1, secret, secret_len);
+
+#define MIN(a,b) (((a)>(b)) ? (b) : (a))
+	memcpy(out, buf, MIN(out_len, SHA1_DIGEST_LENGTH));
+
+	pos = SHA1_DIGEST_LENGTH;
+	while (pos < out_len) {
+		buf[SHA1_DIGEST_LENGTH + prf_size + seed_len + 2]++;
+
+		fr_hmac_sha1(buf, buf, SHA1_DIGEST_LENGTH + prf_size + seed_len + 2 + 1, secret, secret_len);
+		memcpy(&out[pos], buf, MIN(out_len - pos, SHA1_DIGEST_LENGTH));
+
+		if (out_len - pos <= SHA1_DIGEST_LENGTH)
+			break;
+
+		pos += SHA1_DIGEST_LENGTH;
+	}
+
+	memset(buf, 0, SHA1_DIGEST_LENGTH + prf_size + seed_len + 2 + 1);
+	talloc_free(buf);
+}
+
 static void PRF(unsigned char const *secret, unsigned int secret_len,
 		unsigned char const *seed,   unsigned int seed_len,
 		unsigned char *out, unsigned char *buf, unsigned int out_len)
@@ -98,7 +141,6 @@ static void PRF(unsigned char const *secret, unsigned int secret_len,
 		out[i] ^= buf[i];
 	}
 }
-#endif
 
 #define EAPTLS_MPPE_KEY_LEN     32
 
@@ -114,11 +156,9 @@ void eap_tls_gen_mppe_keys(REQUEST *request, SSL *s, char const *prf_label)
 	prf_size = strlen(prf_label);
 
 #if OPENSSL_VERSION_NUMBER >= 0x10001000L
-	if (SSL_export_keying_material(s, out, sizeof(out), prf_label, prf_size, NULL, 0, 0) != 1) {
-		ERROR("Failed generating keying material");
-		return;
-	}
-#else
+	if (SSL_export_keying_material(s, out, sizeof(out), prf_label, prf_size, NULL, 0, 0) != 1) /* Fallback */
+#endif
+
 	{
 		uint8_t seed[64 + (2 * SSL3_RANDOM_SIZE)];
 		uint8_t buf[4 * EAPTLS_MPPE_KEY_LEN];
@@ -138,8 +178,8 @@ void eap_tls_gen_mppe_keys(REQUEST *request, SSL *s, char const *prf_label)
 		PRF(s->session->master_key, s->session->master_key_length,
 		    seed, prf_size, out, buf, sizeof(out));
 	}
-#endif
 
+	RDEBUG2("Adding session keys");
 	p = out;
 	eap_add_reply(request, "MS-MPPE-Recv-Key", p, EAPTLS_MPPE_KEY_LEN);
 	p += EAPTLS_MPPE_KEY_LEN;
@@ -150,35 +190,60 @@ void eap_tls_gen_mppe_keys(REQUEST *request, SSL *s, char const *prf_label)
 }
 
 
-#define FR_TLS_PRF_CHALLENGE	"ttls challenge"
-
 /*
- *	Generate the TTLS challenge
+ *	Generate the challenge using a PRF label.
  *
  *	It's in the TLS module simply because it's only a few lines
  *	of code, and it needs access to the TLS PRF functions.
  */
-void eap_ttls_gen_challenge(SSL *s, uint8_t *buffer, size_t size)
+void eap_tls_gen_challenge(SSL *s, uint8_t *buffer, uint8_t *scratch, size_t size, char const *prf_label)
 {
-#if OPENSSL_VERSION_NUMBER >= 0x10001000L
-	SSL_export_keying_material(s, buffer, size, FR_TLS_PRF_CHALLENGE,
-				   sizeof(FR_TLS_PRF_CHALLENGE) - 1, NULL, 0, 0);
-
-#else
-	uint8_t out[32], buf[32];
-	uint8_t seed[sizeof(FR_TLS_PRF_CHALLENGE)-1 + 2*SSL3_RANDOM_SIZE];
+	uint8_t seed[128 + 2*SSL3_RANDOM_SIZE];
 	uint8_t *p = seed;
+	size_t len;
 
-	memcpy(p, FR_TLS_PRF_CHALLENGE, sizeof(FR_TLS_PRF_CHALLENGE)-1);
-	p += sizeof(FR_TLS_PRF_CHALLENGE)-1;
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+	if (SSL_export_keying_material(s, buffer, size, prf_label,
+				       strlen(prf_label), NULL, 0, 0) == 1) return;
+
+#endif
+
+	len = strlen(prf_label);
+	if (len > 128) len = 128;
+
+	memcpy(p, prf_label, len);
+	p += len;
 	memcpy(p, s->s3->client_random, SSL3_RANDOM_SIZE);
 	p += SSL3_RANDOM_SIZE;
 	memcpy(p, s->s3->server_random, SSL3_RANDOM_SIZE);
+	p += SSL3_RANDOM_SIZE;
 
 	PRF(s->session->master_key, s->session->master_key_length,
-	    seed, sizeof(seed), out, buf, sizeof(out));
-	memcpy(buffer, out, size);
-#endif
+	    seed, p - seed, buffer, scratch, size);
+}
+
+
+/*
+ *	Same as before, but for EAP-FAST the order of {server,client}_random is flipped
+ */
+void eap_fast_tls_gen_challenge(SSL *s, uint8_t *buffer, uint8_t *scratch, size_t size, char const *prf_label)
+{
+	uint8_t seed[128 + 2*SSL3_RANDOM_SIZE];
+	uint8_t *p = seed;
+	size_t len;
+
+	len = strlen(prf_label);
+	if (len > 128) len = 128;
+
+	memcpy(p, prf_label, len);
+	p += len;
+	memcpy(p, s->s3->server_random, SSL3_RANDOM_SIZE);
+	p += SSL3_RANDOM_SIZE;
+	memcpy(p, s->s3->client_random, SSL3_RANDOM_SIZE);
+	p += SSL3_RANDOM_SIZE;
+
+	PRF(s->session->master_key, s->session->master_key_length,
+	    seed, p - seed, buffer, scratch, size);
 }
 
 /*

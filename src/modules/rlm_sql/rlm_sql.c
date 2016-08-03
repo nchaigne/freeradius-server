@@ -153,13 +153,6 @@ static ssize_t sql_xlat(char **out, UNUSED size_t outlen,
 	sql_rcode_t		rcode;
 	ssize_t			ret = 0;
 
-	/*
-	 *	Add SQL-User-Name attribute just in case it is needed
-	 *	We could search the string fmt for SQL-User-Name to see if this is
-	 * 	needed or not
-	 */
-	sql_set_user(inst, request, NULL);
-
 	handle = fr_connection_get(inst->pool, request);	/* connection pool should produce error */
 	if (!handle) return 0;
 
@@ -684,7 +677,7 @@ int sql_set_user(rlm_sql_t const *inst, REQUEST *request, char const *username)
 
 	fr_pair_value_strsteal(vp, expanded);
 	RDEBUG2("SQL-User-Name set to '%s'", vp->vp_strvalue);
-	vp->op = T_OP_SET;	
+	vp->op = T_OP_SET;
 
 	/*
 	 *	Delete any existing SQL-User-Name, and replace it with ours.
@@ -956,6 +949,13 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 				rcode = RLM_MODULE_FAIL;
 				goto finish;
 			}
+
+			if (rows == 0) {
+				*do_fall_through = FALL_THROUGH_DEFAULT;
+				continue;
+			}
+
+			rad_assert(reply_tmp != NULL); /* coverity, among others */
 			*do_fall_through = fall_through(reply_tmp);
 
 			RDEBUG2("Group \"%s\": Merging reply items", entry->name);
@@ -1188,7 +1188,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 				inst->module->sql_escape_func :
 				sql_escape_func;
 
-	inst->ef = module_exfile_init(inst, conf, 64, 30, true, NULL, NULL);
+	inst->ef = module_exfile_init(inst, conf, 256, 30, true, NULL, NULL);
 	if (!inst->ef) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;

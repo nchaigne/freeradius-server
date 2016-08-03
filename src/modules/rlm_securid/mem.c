@@ -33,9 +33,7 @@ SECURID_SESSION* securid_session_alloc(void)
 {
 	SECURID_SESSION	*session;
 
-	session = rad_malloc(sizeof(SECURID_SESSION));
-	memset(session, 0, sizeof(SECURID_SESSION));
-
+	session = talloc_zero(NULL, SECURID_SESSION);
 	session->sdiHandle = SDI_HANDLE_NONE;
 
 	return session;
@@ -44,27 +42,17 @@ SECURID_SESSION* securid_session_alloc(void)
 void securid_session_free(UNUSED rlm_securid_t *inst,REQUEST *request,
 			  SECURID_SESSION *session)
 {
-	if (!session)
-		return;
+	if (!session) return;
 
-	RDEBUG2("Freeing session id=%d identity='%s' state='%s'",
-			 session->session_id,SAFE_STR(session->identity),session->state);
-
-	if (session->identity) {
-		free(session->identity);
-		session->identity = NULL;
-	}
-	if (session->pin) {
-		free(session->pin);
-		session->pin = NULL;
-	}
+	RDEBUG2("Freeing session id=%d identity='%s' state='%s'", session->session_id,
+		SAFE_STR(session->identity), session->state);
 
 	if (session->sdiHandle != SDI_HANDLE_NONE) {
 		SD_Close(session->sdiHandle);
 		session->sdiHandle = SDI_HANDLE_NONE;
 	}
 
-	free(session);
+	talloc_free(session);
 }
 
 

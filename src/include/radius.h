@@ -30,32 +30,42 @@ RCSIDH(radius_h, "$Id$")
  */
 typedef enum {
 	PW_TYPE_INVALID = 0,			//!< Invalid (uninitialised) attribute type.
+
 	PW_TYPE_STRING,				//!< String of printable characters.
-	PW_TYPE_INTEGER,			//!< 32 Bit unsigned integer.
-	PW_TYPE_IPV4_ADDR,			//!< 32 Bit IPv4 Address.
-	PW_TYPE_DATE,				//!< 32 Bit Unix timestamp.
-	PW_TYPE_ABINARY,			//!< Ascend binary format a packed data structure.
 	PW_TYPE_OCTETS,				//!< Raw octets.
-	PW_TYPE_IFID,				//!< Interface ID.
+
+	PW_TYPE_IPV4_ADDR,			//!< 32 Bit IPv4 Address.
+	PW_TYPE_IPV4_PREFIX,			//!< IPv4 Prefix.
 	PW_TYPE_IPV6_ADDR,			//!< 128 Bit IPv6 Address.
 	PW_TYPE_IPV6_PREFIX,			//!< IPv6 Prefix.
+	PW_TYPE_IFID,				//!< Interface ID.
+	PW_TYPE_COMBO_IP_ADDR,			//!< WiMAX IPv4 or IPv6 address depending on length.
+	PW_TYPE_COMBO_IP_PREFIX,		//!< WiMAX IPv4 or IPv6 address prefix depending on length.
+	PW_TYPE_ETHERNET,			//!< 48 Bit Mac-Address.
+
+	PW_TYPE_BOOLEAN,			//!< A truth value.
 	PW_TYPE_BYTE,				//!< 8 Bit unsigned integer.
 	PW_TYPE_SHORT,				//!< 16 Bit unsigned integer.
-	PW_TYPE_ETHERNET,			//!< 48 Bit Mac-Address.
+	PW_TYPE_INTEGER,			//!< 32 Bit unsigned integer.
+	PW_TYPE_INTEGER64,			//!< 64 Bit unsigned integer.
 	PW_TYPE_SIGNED,				//!< 32 Bit signed integer.
-	PW_TYPE_COMBO_IP_ADDR,			//!< WiMAX IPv4 or IPv6 address depending on length.
+
+	PW_TYPE_TIMEVAL,			//!< Time value (struct timeval), only for config items.
+	PW_TYPE_DECIMAL,			//!< Double precision floating point.
+	PW_TYPE_DATE,				//!< 32 Bit Unix timestamp.
+
+	PW_TYPE_ABINARY,			//!< Ascend binary format a packed data structure.
+
 	PW_TYPE_TLV,				//!< Contains nested attributes.
+	PW_TYPE_STRUCT,				//!< like TLV, but without T or L, and fixed-width children
+
 	PW_TYPE_EXTENDED,			//!< Extended attribute space attribute.
 	PW_TYPE_LONG_EXTENDED,			//!< Long extended attribute space attribute.
-	PW_TYPE_EVS,				//!< Extended attribute, vendor specific.
-	PW_TYPE_INTEGER64,			//!< 64 Bit unsigned integer.
-	PW_TYPE_IPV4_PREFIX,			//!< IPv4 Prefix.
+
 	PW_TYPE_VSA,				//!< Vendor-Specific, for RADIUS attribute 26.
+	PW_TYPE_EVS,				//!< Extended attribute, vendor specific.
 	PW_TYPE_VENDOR,				//!< Attribute that represents a vendor in the attribute tree.
-	PW_TYPE_TIMEVAL,			//!< Time value (struct timeval), only for config items.
-	PW_TYPE_BOOLEAN,			//!< A truth value.
-	PW_TYPE_COMBO_IP_PREFIX,		//!< WiMAX IPv4 or IPv6 address prefix depending on length.
-	PW_TYPE_DECIMAL,			//!< Double precision floating point.
+
 	PW_TYPE_MAX				//!< Number of defined data types.
 } PW_TYPE;
 
@@ -72,7 +82,8 @@ typedef enum {
 	     PW_TYPE_EXTENDED: \
 	case PW_TYPE_LONG_EXTENDED: \
 	case PW_TYPE_EVS: \
-	case PW_TYPE_TLV
+	case PW_TYPE_TLV: \
+	case PW_TYPE_STRUCT
 
 /** Match all non value types in case statements
  *
@@ -81,8 +92,8 @@ typedef enum {
  */
 #define PW_TYPE_STRUCTURAL \
 	PW_TYPE_STRUCTURAL_EXCEPT_VSA: \
-     	case PW_TYPE_VSA: \
-     	case PW_TYPE_VENDOR
+	case PW_TYPE_VSA: \
+	case PW_TYPE_VENDOR
 
 /** RADIUS packet codes
  *
@@ -210,15 +221,20 @@ typedef enum {
 /*
  *	Microsoft has vendor code 311.
  */
-#define PW_MSCHAP_RESPONSE		1
-#define PW_MSCHAP_ERROR			2
-#define PW_MSCHAP_CPW_1			3
-#define PW_MSCHAP_CPW_2			4
-#define PW_MSCHAP_NT_ENC_PW		6
-#define PW_MSCHAP_CHALLENGE		11
-#define PW_MSCHAP2_RESPONSE		25
-#define PW_MSCHAP2_SUCCESS		26
-#define PW_MSCHAP2_CPW			27
+#define PW_MSCHAP_RESPONSE			1
+#define PW_MSCHAP_ERROR				2
+#define PW_MSCHAP_CPW_1				3
+#define PW_MSCHAP_CPW_2				4
+#define PW_MSCHAP_NT_ENC_PW			6
+#define PW_MSCHAP_MPPE_ENCRYPTION_POLICY	7
+#define PW_MSCHAP_MPPE_ENCRYPTION_TYPES		8
+#define PW_MSCHAP_CHALLENGE			11
+#define PW_MSCHAP_MPPE_SEND_KEY			16
+#define PW_MSCHAP_MPPE_RECV_KEY			17
+#define PW_MSCHAP2_RESPONSE			25
+#define PW_MSCHAP2_SUCCESS			26
+#define PW_MSCHAP2_CPW				27
+#define PW_MS_QUARANTINE_SOH			55
 
 /*
  * JANET's code for transporting eap channel binding data over ttls

@@ -131,6 +131,8 @@ REQUEST *request_alloc_fake(REQUEST *request)
 	if (!fake) return NULL;
 
 	fake->number = request->number;
+	fake->seq_start = request->seq_start;
+
 	fake->child_pid = request->child_pid;
 	fake->parent = request;
 	fake->root = request->root;
@@ -219,11 +221,12 @@ REQUEST *request_alloc_coa(REQUEST *request)
 	request->coa = request_alloc_fake(request);
 	if (!request->coa) return NULL;
 
+	request->coa->parent = request;
 	request->coa->options = RAD_REQUEST_OPTION_COA;	/* is a CoA packet */
 	request->coa->packet->code = 0; /* unknown, as of yet */
 	request->coa->child_state = REQUEST_RUNNING;
 	request->coa->proxy = request_alloc(request->coa);
-	if (!request->coa->proxy->packet) {
+	if (!request->coa->proxy) {
 		TALLOC_FREE(request->coa);
 		return NULL;
 	}
@@ -246,6 +249,7 @@ REQUEST *request_alloc_proxy(REQUEST *request)
 	request->proxy->log = request->log;
 	request->proxy->parent = request;
 	request->proxy->number = request->number;
+	request->proxy->seq_start = request->seq_start;
 	request->proxy->root = request->root;
 
 	return request->proxy;

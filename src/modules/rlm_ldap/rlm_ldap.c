@@ -29,9 +29,6 @@
  */
 RCSID("$Id$")
 
-#define LOG_PREFIX "rlm_ldap (%s) - "
-#define LOG_PREFIX_ARGS inst->name
-
 #include <freeradius-devel/rad_assert.h>
 
 #include <stdarg.h>
@@ -220,7 +217,7 @@ static CONF_PARSER option_config[] = {
 
 
 static const CONF_PARSER module_config[] = {
-	{ FR_CONF_OFFSET("server", PW_TYPE_STRING, rlm_ldap_t, config_server) },	/* Do not set to required */
+	{ FR_CONF_OFFSET("server", PW_TYPE_STRING | PW_TYPE_MULTI, rlm_ldap_t, config_server) },	/* Do not set to required */
 	{ FR_CONF_OFFSET("port", PW_TYPE_SHORT, rlm_ldap_t, port) },
 
 	{ FR_CONF_OFFSET("identity", PW_TYPE_STRING, rlm_ldap_t, admin_identity) },
@@ -396,7 +393,7 @@ static rlm_rcode_t mod_map_proc(void *mod_inst, UNUSED void *proc_inst, REQUEST 
 
 	ldap_handle_t		*conn;
 
-	rlm_ldap_map_exp_t	expanded; /* faster than mallocing every time */
+	rlm_ldap_map_exp_t	expanded; /* faster than allocing every time */
 
 	if (!ldap_is_ldap_url(url)) {
 		REDEBUG("Map query string does not look like a valid LDAP URI");
@@ -790,9 +787,7 @@ static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	static bool	version_done;
-
-	CONF_PAIR	*cp;
-	CONF_ITEM	*ci;
+	size_t		i;
 
 	CONF_SECTION *options, *update;
 	rlm_ldap_t *inst = instance;
@@ -923,93 +918,29 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 #endif
 
 	/*
-	 *	For backwards compatibility hack up the first 'server'
-	 *	CONF_ITEM into chunks, and add them back into the config.
-	 *
-	 *	@fixme this should be removed at some point.
+	 *	Now iterate over all the 'server' config items
 	 */
-	if (inst->config_server) {
-		char const	*value;
-		char const	*p;
-		char const	*q;
-		char		*buff;
+	for (i = 0; i < talloc_array_length(inst->config_server); i++) {
+		char const *value = inst->config_server[i];
+		size_t j;
 
-		bool		done = false;
-		bool		first = true;
-
-		cp = cf_pair_find(conf, "server");
-		if (!cp) {
-			cf_log_err_cs(conf, "Configuration item 'server' must have a value");
-			return -1;
-		}
-
-		value = cf_pair_value(cp);
-
-		p = value;
-		q = p;
-		while (!done) {
-			switch (*q) {
-			case '\0':
-				done = true;
-				if (p == value) break;	/* string contained no separators */
-
-				/* FALL-THROUGH */
-
+		/*
+		 *	Explicitly prevent multiple server definitions
+		 *	being used in the same string.
+		 */
+		for (j = 0; j < talloc_array_length(value) - 1; j++) {
+			switch (value[j]) {
+			case ' ':
 			case ',':
 			case ';':
-			case ' ':
-				while (isspace((int) *p)) p++;
-				if (p == q) continue;
-
-				buff = talloc_array(inst, char, (q - p) + 1);
-				strlcpy(buff, p, talloc_array_length(buff));
-				p = ++q;
-
-				if (first) {
-					WARN("Listing multiple LDAP servers in the 'server' configuration item "
-					     "is deprecated and will be removed in a future release.  "
-					     "Use multiple 'server' configuration items instead");
-					WARN("- server = '%s'", value);
-				}
-				WARN("+ server = '%s'", buff);
-
-				/*
-				 *	For the first instance of server we find, just replace
-				 *	the existing "server" config item.
-				 */
-				if (first) {
-					cf_pair_replace(conf, cp, buff);
-					first = false;
-					continue;
-				}
-
-				/*
-				 *	For subsequent instances we need to add new conf pairs.
-				 */
-				cp = cf_pair_alloc(conf, "server", buff, T_OP_EQ, T_BARE_WORD, T_SINGLE_QUOTED_STRING);
-				if (!cp) return -1;
-
-				ci = cf_pair_to_item(cp);
-				cf_item_add(conf, ci);
-
-				break;
+				cf_log_err_cs(conf, "Invalid character '%c' found in 'server' configuration item",
+					      value[j]);
+				goto error;
 
 			default:
-				q++;
 				continue;
 			}
 		}
-	}
-
-	/*
-	 *	Now iterate over all the 'server' config items
-	 */
-	for (cp = cf_pair_find(conf, "server");
-	     cp;
-	     cp = cf_pair_find_next(conf, cp, "server")) {
-	     	char const *value;
-
-		value = cf_pair_value(cp);
 
 #ifdef LDAP_CAN_PARSE_URLS
 		/*
@@ -1164,10 +1095,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 			if (strchr(value, '/')) {
 			bad_server_fmt:
 #ifdef LDAP_CAN_PARSE_URLS
-				cf_log_err_cp(cp, "Invalid server value, must be in format <server>[:<port>] or "
+				cf_log_err_cs(conf, "Invalid 'server' entry, must be in format <server>[:<port>] or "
 					      "an ldap URI (ldap|cldap|ldaps|ldapi)://<server>:<port>");
 #else
-				cf_log_err_cp(cp, "Invalid server value, must be in format <server>[:<port>]");
+				cf_log_err_cs(conf, "Invalid 'server' entry, must be in format <server>[:<port>]");
 #endif
 				return -1;
 			}
@@ -1473,7 +1404,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	}
 	conn->rebound = true;
 	status = rlm_ldap_bind(inst, request, &conn, dn, request->password->vp_strvalue,
-			       conn->inst->user_sasl.mech ? &sasl : NULL, true, NULL, NULL);
+			       conn->inst->user_sasl.mech ? &sasl : NULL, true, NULL, NULL, NULL);
 	switch (status) {
 	case LDAP_PROC_SUCCESS:
 		rcode = RLM_MODULE_OK;
@@ -1594,7 +1525,7 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
 	ldap_handle_t		*conn;
 	LDAPMessage		*result, *entry;
 	char const 		*dn = NULL;
-	rlm_ldap_map_exp_t	expanded; /* faster than mallocing every time */
+	rlm_ldap_map_exp_t	expanded; /* faster than allocing every time */
 
 	/*
 	 *	Don't be tempted to add a check for request->username
@@ -1714,7 +1645,7 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
 			 *	Bind as the user
 			 */
 			conn->rebound = true;
-			status = rlm_ldap_bind(inst, request, &conn, dn, vp->vp_strvalue, NULL, true, NULL, NULL);
+			status = rlm_ldap_bind(inst, request, &conn, dn, vp->vp_strvalue, NULL, true, NULL, NULL, NULL);
 			switch (status) {
 			case LDAP_PROC_SUCCESS:
 				rcode = RLM_MODULE_OK;

@@ -895,6 +895,7 @@ no_space:
  *
  * @param[out] out where the pointer to the alloced buffer should
  *	be written.
+ * @param[in] inst of rlm_rest.
  * @param[in] func Stream function.
  * @param[in] limit Maximum buffer size to alloc.
  * @param[in] userdata rlm_rest_request_t to keep encoding state between calls to
@@ -903,7 +904,8 @@ no_space:
  *	- Length of the data written to the buffer (excluding NULL).
  *	- -1 if alloc >= limit.
  */
-static ssize_t rest_request_encode_wrapper(char **out, rest_read_t func, size_t limit, void *userdata)
+static ssize_t rest_request_encode_wrapper(char **out, rlm_rest_t const *inst,
+					   rest_read_t func, size_t limit, void *userdata)
 {
 	char *buff = NULL;
 
@@ -923,8 +925,7 @@ static ssize_t rest_request_encode_wrapper(char **out, rest_read_t func, size_t 
 		alloc = alloc * 2;
 		if (alloc > limit) break;
 
-		buff = talloc_realloc(NULL, buff, char, alloc);
-		if (!buff) return -1;
+		MEM(buff = talloc_realloc(NULL, buff, char, alloc));
 	};
 
 	talloc_free(buff);
@@ -1186,47 +1187,21 @@ static int rest_decode_post(UNUSED rlm_rest_t const *instance, UNUSED rlm_rest_s
  *	- NULL on error.
  */
 static VALUE_PAIR *json_pair_make_leaf(UNUSED rlm_rest_t const *instance, UNUSED rlm_rest_section_t *section,
-				      TALLOC_CTX *ctx, REQUEST *request, fr_dict_attr_t const *da,
-				      json_flags_t *flags, json_object *leaf)
+				      TALLOC_CTX *ctx, REQUEST *request,
+				      fr_dict_attr_t const *da, json_flags_t *flags, json_object *leaf)
 {
-	char const *value, *to_parse;
-	char *expanded = NULL;
-	int ret;
+	char const	*value;
+	char		*expanded = NULL;
+	int 		ret;
 
-	VALUE_PAIR *vp;
+	VALUE_PAIR	*vp;
+
+	PW_TYPE		type;
+	value_data_t	src;
 
 	if (fr_json_object_is_type(leaf, json_type_null)) {
 		RDEBUG3("Got null value for attribute \"%s\", skipping...", da->name);
-
 		return NULL;
-	}
-
-	/*
-	 *	Should encode any nested JSON structures into JSON strings.
-	 *
-	 *	"I knew you liked JSON so I put JSON in your JSON!"
-	 */
-	value = json_object_get_string(leaf);
-	if (!value) {
-		RWDEBUG("Failed getting string value for attribute \"%s\", skipping...", da->name);
-
-		return NULL;
-	}
-
-	RINDENT();
-	RDEBUG3("Type   : %s", fr_int2str(dict_attr_types, da->type, "<INVALID>"));
-	RDEBUG3("Length : %zu", strlen(value));
-	RDEBUG3("Value  : \"%s\"", value);
-	REXDENT();
-
-	if (flags->do_xlat) {
-		if (radius_axlat(&expanded, request, value, NULL, NULL) < 0) {
-			return NULL;
-		}
-
-		to_parse = expanded;
-	} else {
-		to_parse = value;
 	}
 
 	vp = fr_pair_afrom_da(ctx, da);
@@ -1237,16 +1212,62 @@ static VALUE_PAIR *json_pair_make_leaf(UNUSED rlm_rest_t const *instance, UNUSED
 		return NULL;
 	}
 
-	vp->op = flags->op;
+	memset(&src, 0, sizeof(src));
 
-	ret = fr_pair_value_from_str(vp, to_parse, -1);
+	switch (json_object_get_type(leaf)) {
+	case json_type_int:
+		if (flags->do_xlat) RWDEBUG("Ignoring do_xlat on 'int', attribute \"%s\"", da->name);
+		type = PW_TYPE_SIGNED;
+		src.sinteger = json_object_get_int(leaf);
+		break;
+
+	case json_type_double:
+		if (flags->do_xlat) RWDEBUG("Ignoring do_xlat on 'double', attribute \"%s\"", da->name);
+		type = PW_TYPE_DECIMAL;
+		src.decimal = json_object_get_double(leaf);
+		break;
+
+	case json_type_string:
+		type = PW_TYPE_STRING;
+		value = json_object_get_string(leaf);
+		if (flags->do_xlat) {
+			if (radius_axlat(&expanded, request, value, NULL, NULL) < 0) return NULL;
+			src.strvalue = expanded;
+			src.length = talloc_array_length(src.strvalue) - 1;
+		} else {
+			src.strvalue = value;
+			src.length = json_object_get_string_len(leaf);
+		}
+
+		break;
+
+	default:
+		if (flags->do_xlat) RWDEBUG("Ignoring do_xlat on 'object', attribute \"%s\"", da->name);
+
+		/*
+		 *	Should encode any nested JSON structures into JSON strings.
+		 *
+		 *	"I knew you liked JSON so I put JSON in your JSON!"
+		 */
+		type = PW_TYPE_STRING;
+		src.strvalue = json_object_get_string(leaf);
+		if (!src.strvalue) {
+			RWDEBUG("Failed getting string value for attribute \"%s\", skipping...", da->name);
+
+			return NULL;
+		}
+		src.length = strlen(src.strvalue);
+	}
+
+	ret = value_data_cast(vp, &vp->data, vp->da->type, vp->da, type, NULL, &src);
 	talloc_free(expanded);
 	if (ret < 0) {
-		RWDEBUG("Incompatible value assignment for attribute \"%s\", skipping...", da->name);
+		RWDEBUG("Failed parsing value for attribute \"%s\" (skipping): %s", da->name, fr_strerror());
 		talloc_free(vp);
-
 		return NULL;
 	}
+
+	vp->op = flags->op;
 
 	return vp;
 }
@@ -1773,9 +1794,7 @@ static size_t rest_response_body(void *ptr, size_t size, size_t nmemb, void *use
 			p = q + 1;
 		}
 
-		if (*p != '\0') {
-			REDEBUG("%.*s", (int)(t - (p - (char *)ptr)), p);
-		}
+		if (*p != '\0') REDEBUG("%.*s", (int)(t - (p - (char *)ptr)), p);
 
 		return t;
 
@@ -1785,9 +1804,7 @@ static size_t rest_response_body(void *ptr, size_t size, size_t nmemb, void *use
 			p = q + 1;
 		}
 
-		if (*p != '\0') {
-			RDEBUG3("%.*s", (int)(t - (p - (char *)ptr)), p);
-		}
+		if (*p != '\0') RDEBUG3("%.*s", (int)(t - (p - (char *)ptr)), p);
 
 		return t;
 
@@ -1796,13 +1813,11 @@ static size_t rest_response_body(void *ptr, size_t size, size_t nmemb, void *use
 			ctx->alloc += ((t + 1) > REST_BODY_INIT) ? t + 1 : REST_BODY_INIT;
 
 			tmp = ctx->buffer;
-
-			ctx->buffer = rad_malloc(ctx->alloc);
-
+			ctx->buffer = talloc_array(NULL, char, ctx->alloc);
 			/* If data has been written previously */
 			if (tmp) {
 				strlcpy(ctx->buffer, tmp, (ctx->used + 1));
-				free(tmp);
+				talloc_free(tmp);
 			}
 		}
 		strlcpy(ctx->buffer + ctx->used, p, t + 1);
@@ -1893,7 +1908,7 @@ size_t rest_get_handle_data(char const **out, rlm_rest_handle_t *handle)
  *	- 0 on success.
  *	- -1 on failure.
  */
-static int rest_request_config_body(UNUSED rlm_rest_t const *instance, rlm_rest_section_t *section,
+static int rest_request_config_body(rlm_rest_t const *instance, rlm_rest_section_t *section,
 				    REQUEST *request, rlm_rest_handle_t *handle, rest_read_t func)
 {
 	rlm_rest_curl_context_t *ctx = handle->ctx;
@@ -1928,7 +1943,7 @@ static int rest_request_config_body(UNUSED rlm_rest_t const *instance, rlm_rest_
 	 *  If were not doing chunked encoding then we read the entire
 	 *  body into a buffer, and send it in one go.
 	 */
-	len = rest_request_encode_wrapper(&ctx->body, func, REST_BODY_MAX_LEN, &ctx->request);
+	len = rest_request_encode_wrapper(&ctx->body, instance, func, REST_BODY_MAX_LEN, &ctx->request);
 	if (len <= 0) {
 		REDEBUG("Failed creating HTTP body content");
 		return -1;
@@ -2525,16 +2540,13 @@ void rest_request_cleanup(UNUSED rlm_rest_t const *instance, UNUSED rlm_rest_sec
 	/*
 	 *  Free body data (only used if chunking is disabled)
 	 */
-	if (ctx->body != NULL) TALLOC_FREE(ctx->body);
+
 
 	/*
 	 *  Free response data
 	 */
-	if (ctx->response.buffer) {
-		free(ctx->response.buffer);
-		ctx->response.buffer = NULL;
-	}
-
+	TALLOC_FREE(ctx->body);
+	TALLOC_FREE(ctx->response.buffer);
 	TALLOC_FREE(ctx->request.encoder);
 	TALLOC_FREE(ctx->response.decoder);
 }

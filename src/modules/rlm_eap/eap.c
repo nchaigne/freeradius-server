@@ -121,11 +121,6 @@ int eap_module_instantiate(rlm_eap_t *inst, eap_module_t **m_inst, eap_type_t nu
 		p++;
 	}
 
-#if defined(HAVE_DLFCN_H) && defined(RTLD_SELF)
-	method->type = dlsym(RTLD_SELF, mod_name);
-	if (method->type) goto open_self;
-#endif
-
 	/*
 	 *	Link the loaded EAP-Type
 	 */
@@ -143,9 +138,6 @@ int eap_module_instantiate(rlm_eap_t *inst, eap_module_t **m_inst, eap_type_t nu
 		return -1;
 	}
 
-#if defined(HAVE_DLFCN_H) && defined(RTLD_SELF)
-open_self:
-#endif
 	cf_log_module(cs, "Linked to sub-module %s", mod_name);
 
 	/*
@@ -429,7 +421,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_session_t *eap_session)
  *	compose EAP reply packet in EAP-Message attr of RADIUS.
  *
  *	Set the RADIUS reply codes based on EAP request codes.  Append
- *	any additonal VPs to RADIUS reply
+ *	any additional VPs to RADIUS reply
  */
 rlm_rcode_t eap_compose(eap_session_t *eap_session)
 {
@@ -858,7 +850,7 @@ void eap_success(eap_session_t *eap_session)
 }
 
 /*
- * Basic EAP packet verfications & validations
+ * Basic EAP packet verifications & validations
  */
 static int eap_validation(REQUEST *request, eap_packet_raw_t **eap_packet_p)
 {
@@ -976,12 +968,12 @@ static char *eap_identity(REQUEST *request, eap_session_t *eap_session, eap_pack
 	len = ntohs(len);
 
 	if ((len <= 5) || (eap_packet->data[1] == 0x00)) {
-		RDEBUG("EAP-Identity Unknown");
+		REDEBUG("EAP-Identity Unknown");
 		return NULL;
 	}
 
 	if (len > 1024) {
-		RDEBUG("EAP-Identity too long");
+		REDEBUG("EAP-Identity too long");
 		return NULL;
 	}
 
@@ -1094,7 +1086,7 @@ void eap_session_destroy(eap_session_t **eap_session)
  * rounds of EAP) of the #eap_session_t associated with REQUEST_DATA_EAP_SESSION, is
  * done by the state API.
  *
- * @note must be called before the mod_* function rlm_eap returns.
+ * @note must be called before mod_* functions in rlm_eap return.
  *
  * @see eap_session_continue
  * @see eap_session_thaw
@@ -1168,10 +1160,11 @@ eap_session_t *eap_session_thaw(REQUEST *request)
  * @see eap_session_thaw
  * @see eap_session_destroy
  *
- * @param eap_packet_p extracted from the RADIUS Access-Request.  Consumed or freed by this
- *	function.  Do not access after calling this function.
- * @param inst of the rlm_eap module.
- * @param request The current request.
+ * @param[in] eap_packet_p extracted from the RADIUS Access-Request.  Consumed or freed by this
+ *	function.  Do not access after calling this function. Is a **so the packet pointer can be
+ *	set to NULL.
+ * @param[in] inst of the rlm_eap module.
+ * @param[in] request The current request.
  * @return
  *	- A newly allocated eap_session_t, or the one associated with the current request.
  *	  MUST be freed with #eap_session_destroy if being disposed of, OR
@@ -1203,7 +1196,15 @@ eap_session_t *eap_session_continue(eap_packet_raw_t **eap_packet_p, rlm_eap_t *
 	 */
 	if (eap_packet->data[0] != PW_EAP_IDENTITY) {
 		eap_session = eap_session_thaw(request);
-		if (!eap_session) goto error;
+		if (!eap_session) {
+			vp = fr_pair_find_by_num(request->packet->vps, 0, PW_STATE, TAG_ANY);
+			if (!vp) {
+				REDEBUG("EAP requires the State attribute to work, but no State exists in the Access-Request packet.");
+				REDEBUG("The RADIUS client is broken.  No amount of changing FreeRADIUS will fix the RADIUS client.");
+			}
+
+			goto error;
+		}
 
 		RDEBUG4("Got eap_session_t %p from request data", eap_session);
 #ifdef WITH_VERIFY_PTR

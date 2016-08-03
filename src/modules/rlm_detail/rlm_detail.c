@@ -131,7 +131,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->escape_func = rad_filename_make_safe;
 	}
 
-	inst->ef = module_exfile_init(inst, conf, 64, 30, inst->locking, NULL, NULL);
+	inst->ef = module_exfile_init(inst, conf, 256, 30, inst->locking, NULL, NULL);
 	if (!inst->ef) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;
@@ -485,8 +485,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_send_coa(void *instance, REQUEST *reques
 static rlm_rcode_t CC_HINT(nonnull) mod_pre_proxy(void *instance, REQUEST *request)
 {
 	return detail_do(instance, request, request->proxy->packet, false);
-
-	return RLM_MODULE_NOOP;
 }
 
 

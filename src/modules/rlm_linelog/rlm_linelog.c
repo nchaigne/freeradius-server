@@ -157,15 +157,6 @@ static const CONF_PARSER tcp_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-/*
- *	A mapping of configuration file names to internal variables.
- *
- *	Note that the string is dynamically allocated, so it MUST
- *	be freed.  When the configuration file parse re-reads the string,
- *	it free's the old one, and strdup's the new one, placing the pointer
- *	to the strdup'd string into 'config.string'.  This gets around
- *	buffer over-flows.
- */
 static const CONF_PARSER module_config[] = {
 	{ FR_CONF_OFFSET("destination", PW_TYPE_STRING | PW_TYPE_REQUIRED, linelog_instance_t, log_dst_str) },
 
@@ -345,7 +336,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 			return -1;
 		}
 
-		inst->file.ef = module_exfile_init(inst, conf, 64, 30, true, NULL, NULL);
+		inst->file.ef = module_exfile_init(inst, conf, 256, 30, true, NULL, NULL);
 		if (!inst->file.ef) {
 			cf_log_err_cs(conf, "Failed creating log file context");
 			return -1;
@@ -596,7 +587,7 @@ static rlm_rcode_t mod_do_linelog(void *instance, REQUEST *request)
 
 		/*
 		 *	Alloc a template from the value of the CONF_PAIR
-		 *	using request as the context (which will hopefully avoid a malloc).
+		 *	using request as the context (which will hopefully avoid an alloc).
 		 */
 		slen = tmpl_afrom_str(request, &vpt, tmpl_str, talloc_array_length(tmpl_str) - 1,
 				      cf_pair_value_type(cp), REQUEST_CURRENT, PAIR_LIST_REQUEST, true);

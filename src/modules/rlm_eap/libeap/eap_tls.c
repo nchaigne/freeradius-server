@@ -257,10 +257,15 @@ int eap_tls_success(eap_session_t *eap_session)
 
 	eap_session->finished = true;
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
 	/*
-	 *	Check session resumption is allowed (if we're in a resumed session)
+	 *	Check session resumption is allowed, disabling it
+	 *	if it's not.
 	 */
-	if (tls_cache_allow(request, tls_session) < 0) return -1;
+	SSL_set_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_REQUEST, request);
+	tls_cache_disable_cb(tls_session->ssl, -1);
+	SSL_set_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_REQUEST, NULL);
+#endif
 
 	/*
 	 *	Build the success packet
@@ -771,13 +776,7 @@ static eap_tls_status_t eap_tls_handshake(eap_session_t *eap_session)
 	tls_session_t		*tls_session = eap_tls_session->tls_session;
 
 	/*
-	 *	We have the complete TLS-data or TLS-message.
-	 *
-	 *	Clean the dirty message.
-	 *
-	 *	Authenticate the user and send Success/Failure.
-	 *
-	 *	If more info is required then send another request.
+	 *	Continue the TLS handshake
 	 */
 	if (!tls_session_handshake(eap_session->request, tls_session)) {
 		REDEBUG("TLS receive handshake failed during operation");
@@ -797,8 +796,11 @@ static eap_tls_status_t eap_tls_handshake(eap_session_t *eap_session)
 
 	/*
 	 *	If there is no data to send i.e dirty_out.used <=0 and
-	 *	if the SSL handshake is finished, then return a
-	 *	EAP_TLS_ESTABLISHED
+	 *	if the SSL handshake is finished, then return
+	 *	EAP_TLS_ESTABLISHED.
+	 *
+	 *	For EAP-TLS this translates to an EAP-Success, for others
+	 *	this begins phase2.
 	 */
 	if (eap_tls_session->phase2 || SSL_is_init_finished(tls_session->ssl)) {
 		eap_tls_session->phase2 = true;
@@ -964,8 +966,7 @@ eap_tls_status_t eap_tls_process(eap_session_t *eap_session)
 		 *	Return a "yes we're done" if there's no more data to send,
 		 *	and we've just managed to finish the SSL session initialization.
 		 */
-		if (!eap_tls_session->phase2 &&
-		    (tls_session->dirty_out.used == 0) &&
+		if (!eap_tls_session->phase2 && (tls_session->dirty_out.used == 0) &&
 		    SSL_is_init_finished(tls_session->ssl)) {
 			eap_tls_session->phase2 = true;
 			return EAP_TLS_RECORD_RECV_COMPLETE;
@@ -1053,7 +1054,7 @@ eap_tls_session_t *eap_tls_session_init(eap_session_t *eap_session, fr_tls_conf_
 	SSL_set_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_CONF, (void *)tls_conf);
 	SSL_set_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_IDENTITY, (void *)&(eap_session->identity));
 #ifdef HAVE_OPENSSL_OCSP_H
-	SSL_set_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_STORE, (void *)tls_conf->ocsp_store);
+	SSL_set_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_STORE, (void *)tls_conf->ocsp.store);
 #endif
 
 	return eap_tls_session;
@@ -1077,9 +1078,7 @@ fr_tls_conf_t *eap_tls_conf_parse(CONF_SECTION *cs, char const *attr)
 	CONF_PAIR		*cp;
 	CONF_SECTION		*parent;
 	CONF_SECTION		*tls_cs;
-	fr_tls_conf_t	*tls_conf;
-
-	if (!cs) return NULL;
+	fr_tls_conf_t		*tls_conf;
 
 	rad_assert(attr != NULL);
 

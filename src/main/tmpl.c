@@ -497,7 +497,7 @@ int radius_request(REQUEST **context, request_refs_t name)
 
 /** Initialise stack allocated #vp_tmpl_t
  *
- * @note Name is not strdupe'd or memcpy'd so must be available, and must not change
+ * @note Name is not talloc_strdup'd or memcpy'd so must be available, and must not change
  *	for the lifetime of the #vp_tmpl_t.
  *
  * @param[out] vpt to initialise.
@@ -1648,132 +1648,164 @@ ssize_t tmpl_expand(char const **out, char *buff, size_t bufflen, REQUEST *reque
  * @note The type (char or uint8_t) can be obtained with talloc_get_type, and may be used as a
  *	hint as to how to process or print the data.
  *
- * @param ctx to allocate new buffer in.
- * @param out Where to write pointer to the new buffer.
- * @param request Current request.
- * @param vpt to expand. Must be one of the following types:
- *	- #TMPL_TYPE_UNPARSED
- *	- #TMPL_TYPE_EXEC
- *	- #TMPL_TYPE_XLAT
- *	- #TMPL_TYPE_XLAT_STRUCT
- *	- #TMPL_TYPE_ATTR
- *	- #TMPL_TYPE_DATA
- * @param escape xlat escape function (only used for xlat types).
- * @param escape_ctx xlat escape function data (only used for xlat types).
+ * @param ctx		to allocate new buffer in.
+ * @param out		Where to write pointer to the new buffer.
+ * @param request	Current request.
+ * @param vpt		to expand. Must be one of the following types:
+ *			- #TMPL_TYPE_UNPARSED
+ *			- #TMPL_TYPE_EXEC
+ *			- #TMPL_TYPE_XLAT
+ *			- #TMPL_TYPE_XLAT_STRUCT
+ *			- #TMPL_TYPE_ATTR
+ *			- #TMPL_TYPE_DATA
+ * @param escape xlat	escape function (only used for TMPL_TYPE_XLAT_* types).
+ * @param escape_ctx	xlat escape function data (only used for TMPL_TYPE_XLAT_* types).
+ * @param dst_type	- PW_TYPE_* matching out pointer.  @see tmpl_aexpand.
  * @return
  *	- -1 on failure.
  *	- The length of data written to buff, or pointed to by out.
  */
-ssize_t tmpl_aexpand(TALLOC_CTX *ctx, char **out, REQUEST *request, vp_tmpl_t const *vpt,
-		     xlat_escape_t escape, void *escape_ctx)
+ssize_t _tmpl_to_atype(TALLOC_CTX *ctx, void *out,
+		       REQUEST *request,
+		       vp_tmpl_t const *vpt,
+		       xlat_escape_t escape, void *escape_ctx,
+		       PW_TYPE dst_type)
 {
-	VALUE_PAIR *vp;
-	ssize_t slen = -1;	/* quiet compiler */
+	value_data_t const	*to_cast = NULL;
+	value_data_t		from_cast;
 
-	rad_assert(vpt->type != TMPL_TYPE_LIST);
+	VALUE_PAIR		*vp = NULL;
+	value_data_t		vd;
+	PW_TYPE			src_type = PW_TYPE_STRING;
+	bool			needs_dup = false;
+
+	ssize_t			slen = -1;	/* quiet compiler */
+	int			ret;
 
 	VERIFY_TMPL(vpt);
 
-	*out = NULL;
+	memset(&vd, 0, sizeof(vd));
 
 	switch (vpt->type) {
 	case TMPL_TYPE_UNPARSED:
-		RDEBUG4("EXPAND TMPL LITERAL");
-		*out = talloc_bstrndup(ctx, vpt->name, vpt->len);
-		return vpt->len;
+		RDEBUG4("EXPAND TMPL UNPARSED");
+
+		vd.length = vpt->len;
+		vd.strvalue = vpt->name;
+		to_cast = &vd;
+		break;
 
 	case TMPL_TYPE_EXEC:
-	{
-		char *buff = NULL;
-
 		RDEBUG4("EXPAND TMPL EXEC");
-		buff = talloc_array(ctx, char, 1024);
-		if (radius_exec_program(request, buff, 1024, NULL, request, vpt->name, NULL,
+
+		MEM(vd.strvalue = talloc_array(ctx, char, 1024));
+		if (radius_exec_program(request, (char *)vd.ptr, 1024, NULL, request, vpt->name, NULL,
 					true, false, EXEC_TIMEOUT) != 0) {
-			TALLOC_FREE(buff);
+			TALLOC_FREE(vd.ptr);
 			return -1;
 		}
-		slen = strlen(buff);
-		*out = buff;
-	}
+		vd.length = strlen(vd.strvalue);
+		MEM(vd.strvalue = talloc_realloc(ctx, vd.ptr, char, vd.length + 1));	/* Trim */
+		rad_assert(vd.strvalue[vd.length] == '\0');
+		to_cast = &vd;
 		break;
 
 	case TMPL_TYPE_XLAT:
+	{
+		value_data_t	tmp;
+
 		RDEBUG4("EXPAND TMPL XLAT");
+
 		/* Error in expansion, this is distinct from zero length expansion */
-		slen = radius_axlat(out, request, vpt->name, escape, escape_ctx);
-		if (slen < 0) {
-			rad_assert(!*out);
-			return slen;
-		}
-		rad_assert(*out);
-		slen = strlen(*out);
+		slen = radius_axlat((char **)&vd.ptr, request, vpt->name, escape, escape_ctx);
+		if (slen < 0) return slen;
+		vd.length = slen;
+
+		/*
+		 *	Undo any of the escaping that was done by the
+		 *	xlat expansion function.
+		 *
+		 *	@fixme We need a way of signalling xlat not to escape things.
+		 */
+		ret = value_data_from_str(ctx, &tmp, &src_type, NULL, vd.strvalue, vd.length, '"');
+		talloc_free(vd.ptr);	/* free the old value */
+		if (ret < 0) return -1;
+
+		vd.strvalue = tmp.strvalue;
+		vd.length = tmp.length;
+		to_cast = &vd;
+	}
 		break;
 
 	case TMPL_TYPE_XLAT_STRUCT:
-		RDEBUG4("EXPAND TMPL XLAT STRUCT");
-		/* Error in expansion, this is distinct from zero length expansion */
-		slen = radius_axlat_struct(out, request, vpt->tmpl_xlat, escape, escape_ctx);
-		if (slen < 0) {
-			rad_assert(!*out);
-			return slen;
-		}
-		rad_assert(*out);
+	{
+		value_data_t	tmp;
 
-		slen = strlen(*out);
+		RDEBUG4("EXPAND TMPL XLAT STRUCT");
+		RDEBUG2("EXPAND %s", vpt->name); /* xlat_struct doesn't do this */
+
+		/* Error in expansion, this is distinct from zero length expansion */
+		slen = radius_axlat_struct((char **)&vd.ptr, request, vpt->tmpl_xlat, escape, escape_ctx);
+		if (slen < 0) return slen;
+
+		vd.length = slen;
+
+		/*
+		 *	Undo any of the escaping that was done by the
+		 *	xlat expansion function.
+		 *
+		 *	@fixme We need a way of signalling xlat not to escape things.
+		 */
+		ret = value_data_from_str(ctx, &tmp, &src_type, NULL, vd.strvalue, vd.length, '"');
+		talloc_free(vd.ptr);	/* free the old value */
+		if (ret < 0) return -1;
+
+		vd.strvalue = tmp.strvalue;
+		vd.length = tmp.length;
+		to_cast = &vd;
+
+		RDEBUG2("   --> %s", vd.strvalue);	/* Print post-unescaping */
+	}
 		break;
 
 	case TMPL_TYPE_ATTR:
-	{
-		int ret;
-
 		RDEBUG4("EXPAND TMPL ATTR");
+
 		ret = tmpl_find_vp(&vp, request, vpt);
 		if (ret < 0) return -2;
 
-		switch (vpt->tmpl_da->type) {
-		case PW_TYPE_STRING:
-			*out = talloc_bstrndup(ctx, vp->vp_strvalue, vp->vp_length);
-			if (!*out) return -1;
-			slen = vp->vp_length;
-			break;
+		rad_assert(vp);
 
+		to_cast = &vp->data;
+		src_type = vp->da->type;
+
+		switch (src_type) {
+		case PW_TYPE_STRING:
 		case PW_TYPE_OCTETS:
-			*out = talloc_memdup(ctx, vp->vp_octets, vp->vp_length);
-			if (!*out) return -1;
-			slen = vp->vp_length;
+			rad_assert(to_cast->ptr);
+			needs_dup = true;
 			break;
 
 		default:
-			*out = fr_pair_value_asprint(ctx, vp, '\0');
-			if (!*out) return -1;
-			slen = talloc_array_length(*out) - 1;
 			break;
 		}
-	}
 		break;
 
 	case TMPL_TYPE_DATA:
 	{
 		RDEBUG4("EXPAND TMPL DATA");
 
-		switch (vpt->tmpl_data_type) {
-		case PW_TYPE_STRING:
-			*out = talloc_bstrndup(ctx, vpt->tmpl_data_value.strvalue, vpt->tmpl_data_length);
-			if (!*out) return -1;
-			slen = vpt->tmpl_data_length;
-			break;
+		to_cast = &vpt->tmpl_data_value;
+		src_type = vpt->tmpl_data_type;
 
+		switch (src_type) {
+		case PW_TYPE_STRING:
 		case PW_TYPE_OCTETS:
-			*out = talloc_memdup(ctx, vpt->tmpl_data_value.octets, vpt->tmpl_data_length);
-			if (!*out) return -1;
-			slen = vpt->tmpl_data_length;
+			rad_assert(to_cast->ptr);
+			needs_dup = true;
 			break;
 
 		default:
-			*out = value_data_asprint(ctx, vpt->tmpl_data_type, NULL, &vpt->tmpl_data_value, '\0');
-			if (!*out) return -1;
-			slen = talloc_array_length(*out) - 1;
 			break;
 		}
 	}
@@ -1788,38 +1820,28 @@ ssize_t tmpl_aexpand(TALLOC_CTX *ctx, char **out, REQUEST *request, vp_tmpl_t co
 	case TMPL_TYPE_REGEX:
 	case TMPL_TYPE_ATTR_UNDEFINED:
 	case TMPL_TYPE_REGEX_STRUCT:
-		rad_assert(0 == 1);
-		slen = -1;
-		break;
+		rad_assert(0);
+		talloc_free(vd.ptr);
+		return -1;
 	}
-
-	if (slen < 0) return slen;
 
 	/*
-	 *	If we're doing correct escapes, we may have to re-parse the string.
-	 *	If the string is from another expansion, it needs re-parsing.
-	 *	Or, if it's from a "string" attribute, it needs re-parsing.
-	 *	Integers, IP addresses, etc. don't need re-parsing.
+	 *	Don't dup the buffers unless we need to.
 	 */
-	if (vpt->type != TMPL_TYPE_ATTR) {
-	     	value_data_t	vd;
-	     	int		ret;
-
-		PW_TYPE type = PW_TYPE_STRING;
-
-		ret = value_data_from_str(ctx, &vd, &type, NULL, *out, slen, '"');
-		talloc_free(*out);	/* free the old value */
+	if ((src_type != dst_type) || needs_dup) {
+		ret = value_data_cast(ctx, &from_cast, dst_type, NULL, src_type, vp ? vp->da : NULL, to_cast);
+		talloc_free(vd.ptr);
 		if (ret < 0) return -1;
-		*out = vd.ptr;
-		slen = vd.length;
+	} else {
+		memcpy(&from_cast, to_cast, sizeof(from_cast));
 	}
 
-	if (vpt->type == TMPL_TYPE_XLAT_STRUCT) {
-		RDEBUG2("EXPAND %s", vpt->name); /* xlat_struct doesn't do this */
-		RDEBUG2("   --> %s", *out);
-	}
+	RDEBUG4("Copying %zu bytes to %p from offset %zu",
+		value_data_field_sizes[dst_type], *((void **)out), value_data_offsets[dst_type]);
 
-	return slen;
+	memcpy(out, &from_cast + value_data_offsets[dst_type], value_data_field_sizes[dst_type]);
+
+	return from_cast.length;
 }
 
 /** Print a #vp_tmpl_t to a string

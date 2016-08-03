@@ -194,8 +194,6 @@ typedef struct THREAD_POOL {
 	uint32_t	max_queue_size;
 	uint32_t	num_queued;
 
-	uint32_t        requests;
-
 	fr_heap_cmp_t	heap_cmp;
 
 	uint32_t	total_threads;
@@ -501,7 +499,6 @@ void request_enqueue(REQUEST *request)
 	thread_pool.active_head = thread;
 	thread_pool.active_threads++;
 
-	thread_pool.requests++;
 	pthread_mutex_unlock(&thread_pool.mutex);
 
 	thread->status = THREAD_ACTIVE;
@@ -519,6 +516,18 @@ void request_enqueue(REQUEST *request)
 	sem_post(&thread->semaphore);
 }
 
+
+void request_queue_extract(REQUEST *request)
+{
+	if (request->heap_id < 0) return;
+	
+	pthread_mutex_lock(&thread_pool.mutex);
+	(void) fr_heap_extract(thread_pool.idle_heap, request);
+	thread_pool.num_queued--;
+	pthread_mutex_unlock(&thread_pool.mutex);
+}
+
+
 /*
  *	Remove a request from the queue.
  *
@@ -528,8 +537,7 @@ static REQUEST *request_dequeue(void)
 {
 	time_t blocked;
 	static time_t last_complained = 0;
-	static time_t total_blocked = 0;
-	int num_blocked = 0;
+	int num_blocked;
 	REQUEST *request = NULL;
 
 retry:
@@ -566,17 +574,17 @@ retry:
 
 	blocked = time(NULL);
 	if (!request->proxy && (blocked - request->timestamp.tv_sec) > 5) {
-		total_blocked++;
 		if (last_complained < blocked) {
 			last_complained = blocked;
 			blocked -= request->timestamp.tv_sec;
-			num_blocked = total_blocked;
+			num_blocked = fr_heap_num_elements(thread_pool.idle_heap);
 		} else {
 			blocked = 0;
+			num_blocked = 0;
 		}
 	} else {
-		total_blocked = 0;
 		blocked = 0;
+		num_blocked = 0;
 	}
 
 	if (blocked) {
@@ -691,15 +699,15 @@ static void *request_handler_thread(void *arg)
 			VALUE_PAIR *vp;
 
 			vp = radius_pair_create(request, &request->control,
-					       181, VENDORPEC_FREERADIUS);
+					       PW_FREERADIUS_QUEUE_PPS_IN, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
 			vp = radius_pair_create(request, &request->control,
-					       182, VENDORPEC_FREERADIUS);
+					       PW_FREERADIUS_QUEUE_PPS_OUT, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
 			vp = radius_pair_create(request, &request->control,
-					       183, VENDORPEC_FREERADIUS);
+					       PW_FREERADIUS_QUEUE_USE_PERCENTAGE, VENDORPEC_FREERADIUS);
 			if (vp) {
 				vp->vp_integer = thread_pool.max_queue_size - thread_pool.num_queued;
 				vp->vp_integer *= 100;
@@ -710,7 +718,7 @@ static void *request_handler_thread(void *arg)
 
 		thread->request_count++;
 
-		DEBUG2("Thread %d handling request %d, (%d handled so far)",
+		DEBUG2("Thread %d handling request %" PRIu64 ", (%d handled so far)",
 		       thread->thread_num, request->number,
 		       thread->request_count);
 
@@ -813,14 +821,14 @@ static void *request_handler_thread(void *arg)
 
 	DEBUG2("Thread %d exiting...", thread->thread_num);
 
-#  ifdef HAVE_OPENSSL_ERR_H
+#ifdef HAVE_OPENSSL_ERR_H
 	/*
 	 *	If we linked with OpenSSL, the application
 	 *	must remove the thread's error queue before
 	 *	exiting to prevent memory leaks.
 	 */
-	ERR_remove_state(0);
-#  endif
+	FR_TLS_REMOVE_THREAD_STATE();
+#endif
 
 	trigger_exec(NULL, NULL, "server.thread.stop", true, NULL);
 	thread->status = THREAD_EXITED;
@@ -843,8 +851,7 @@ static THREAD_HANDLE *spawn_thread(time_t now, int do_trigger)
 	/*
 	 *	Allocate a new thread handle.
 	 */
-	thread = (THREAD_HANDLE *) rad_malloc(sizeof(THREAD_HANDLE));
-	memset(thread, 0, sizeof(THREAD_HANDLE));
+	MEM(thread = talloc_zero(NULL, THREAD_HANDLE));
 
 	thread->thread_num = thread_pool.max_thread_num++;
 	thread->request_count = 0;
@@ -855,7 +862,7 @@ static THREAD_HANDLE *spawn_thread(time_t now, int do_trigger)
 	rcode = sem_init(&thread->semaphore, 0, SEMAPHORE_LOCKED);
 	if (rcode != 0) {
 		ERROR("Failed to initialize semaphore: %s", fr_syserror(errno));
-		free(thread);
+		talloc_free(thread);
 		return NULL;
 	}
 
@@ -868,7 +875,7 @@ static THREAD_HANDLE *spawn_thread(time_t now, int do_trigger)
 	 */
 	rcode = pthread_create(&thread->pthread_id, 0, request_handler_thread, thread);
 	if (rcode != 0) {
-		free(thread);
+		talloc_free(thread);
 		ERROR("Thread create failed: %s",
 		       fr_syserror(rcode));
 		return NULL;
@@ -993,7 +1000,7 @@ int thread_pool_bootstrap(CONF_SECTION *cs, bool *spawn_workers)
 	 */
 	FR_INTEGER_BOUND_CHECK("min_spare_servers", thread_pool.min_spare_threads, >=, 1);
 	FR_INTEGER_BOUND_CHECK("max_spare_servers", thread_pool.max_spare_threads, >=, 1);
-	FR_INTEGER_BOUND_CHECK("max_spare_servers", thread_pool.max_spare_threads, <, thread_pool.min_spare_threads);
+	FR_INTEGER_BOUND_CHECK("max_spare_servers", thread_pool.max_spare_threads, >=, thread_pool.min_spare_threads);
 
 	FR_INTEGER_BOUND_CHECK("max_queue_size", thread_pool.max_queue_size, >=, 2);
 	FR_INTEGER_BOUND_CHECK("max_queue_size", thread_pool.max_queue_size, <, 1024*1024);
@@ -1033,6 +1040,11 @@ int thread_pool_bootstrap(CONF_SECTION *cs, bool *spawn_workers)
 	return 0;
 }
 
+static void thread_handle_free(void *th)
+{
+	talloc_free(th);
+}
+
 
 /*
  *	Allocate the thread pool, and seed it with an initial number
@@ -1070,7 +1082,7 @@ int thread_pool_init(void)
 	/*
 	 *	Create the hash table of child PID's
 	 */
-	thread_pool.waiters = fr_hash_table_create(NULL, pid_hash, pid_cmp, free);
+	thread_pool.waiters = fr_hash_table_create(NULL, pid_hash, pid_cmp, thread_handle_free);
 	if (!thread_pool.waiters) {
 		ERROR("FATAL: Failed to set up wait hash");
 		return -1;
@@ -1122,8 +1134,7 @@ int thread_pool_init(void)
 #else
 	thread_pool.queue = dispatch_queue_create("org.freeradius.threads", NULL);
 	if (!thread_pool.queue) {
-		ERROR("Failed creating dispatch queue: %s\n",
-		       fr_syserror(errno));
+		ERROR("Failed creating dispatch queue: %s", fr_syserror(errno));
 		fr_exit(1);
 	}
 #endif
@@ -1158,7 +1169,7 @@ void thread_pool_stop(void)
 		next = thread->next;
 
 		pthread_join(thread->pthread_id, NULL);
-		free(thread);
+		talloc_free(thread);
 	}
 
 	for (thread = thread_pool.idle_head; thread; thread = next) {
@@ -1168,7 +1179,7 @@ void thread_pool_stop(void)
 		sem_post(&thread->semaphore);
 
 		pthread_join(thread->pthread_id, NULL);
-		free(thread);
+		talloc_free(thread);
 	}
 
 	for (thread = thread_pool.active_head; thread; thread = next) {
@@ -1178,7 +1189,7 @@ void thread_pool_stop(void)
 		sem_post(&thread->semaphore);
 
 		pthread_join(thread->pthread_id, NULL);
-		free(thread);
+		talloc_free(thread);
 	}
 
 	fr_heap_delete(thread_pool.idle_heap);
@@ -1246,7 +1257,7 @@ static void thread_pool_manage(time_t now)
 		 */
 		pthread_mutex_unlock(&thread_pool.mutex);
 		pthread_join(thread->pthread_id, NULL);
-		free(thread);
+		talloc_free(thread);
 		pthread_mutex_lock(&thread_pool.mutex);
 	}
 
@@ -1396,9 +1407,7 @@ static pid_t thread_fork(void)
 		int rcode;
 		thread_fork_t *tf;
 
-		tf = rad_malloc(sizeof(*tf));
-		memset(tf, 0, sizeof(*tf));
-
+		MEM(tf = talloc_zero(NULL, thread_fork_t));
 		tf->pid = child_pid;
 
 		pthread_mutex_lock(&thread_pool.wait_mutex);
@@ -1408,7 +1417,7 @@ static pid_t thread_fork(void)
 		if (!rcode) {
 			ERROR("Failed to store PID, creating what will be a zombie process %d",
 			       (int) child_pid);
-			free(tf);
+			talloc_free(tf);
 		}
 	}
 

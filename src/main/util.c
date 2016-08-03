@@ -405,24 +405,6 @@ ssize_t rad_filename_unescape(char *out, size_t outlen, char const *in, size_t i
 	return outlen - freespace;	/* how many bytes were written */
 }
 
-/*
- *	Allocate memory, or exit.
- *
- *	This call ALWAYS succeeds!
- */
-void *rad_malloc(size_t size)
-{
-	void *ptr = malloc(size);
-
-	if (ptr == NULL) {
-		ERROR("no memory");
-		fr_exit(1);
-	}
-
-	return ptr;
-}
-
-
 void rad_const_free(void const *ptr)
 {
 	void *tmp;
@@ -1025,11 +1007,7 @@ int rad_getpwuid(TALLOC_CTX *ctx, struct passwd **out, uid_t uid)
 	 */
 	while ((ret = getpwuid_r(uid, (struct passwd *)buff, (char *)(buff + sizeof(struct passwd)),
 				 talloc_array_length(buff) - sizeof(struct passwd), out)) == ERANGE) {
-		buff = talloc_realloc_size(ctx, buff, talloc_array_length(buff) * 2);
-		if (!buff) {
-			talloc_free(buff);
-			return -1;
-		}
+		MEM(buff = talloc_realloc_size(ctx, buff, talloc_array_length(buff) * 2));
 	}
 
 	if ((ret != 0) || !*out) {
@@ -1092,11 +1070,7 @@ int rad_getpwnam(TALLOC_CTX *ctx, struct passwd **out, char const *name)
 	 */
 	while ((ret = getpwnam_r(name, (struct passwd *)buff, (char *)(buff + sizeof(struct passwd)),
 				 talloc_array_length(buff) - sizeof(struct passwd), out)) == ERANGE) {
-		buff = talloc_realloc_size(ctx, buff, talloc_array_length(buff) * 2);
-		if (!buff) {
-			talloc_free(buff);
-			return -1;
-		}
+		MEM(buff = talloc_realloc_size(ctx, buff, talloc_array_length(buff) * 2));
 	}
 
 	if ((ret != 0) || !*out) {
@@ -1159,11 +1133,7 @@ int rad_getgrgid(TALLOC_CTX *ctx, struct group **out, gid_t gid)
 	 */
 	while ((ret = getgrgid_r(gid, (struct group *)buff, (char *)(buff + sizeof(struct group)),
 				 talloc_array_length(buff) - sizeof(struct group), out)) == ERANGE) {
-		buff = talloc_realloc_size(ctx, buff, talloc_array_length(buff) * 2);
-		if (!buff) {
-			talloc_free(buff);
-			return -1;
-		}
+		MEM(buff = talloc_realloc_size(ctx, buff, talloc_array_length(buff) * 2));
 	}
 
 	if ((ret != 0) || !*out) {
@@ -1226,11 +1196,7 @@ int rad_getgrnam(TALLOC_CTX *ctx, struct group **out, char const *name)
 	 */
 	while ((ret = getgrnam_r(name, (struct group *)buff, (char *)(buff + sizeof(struct group)),
 				 talloc_array_length(buff) - sizeof(struct group), out)) == ERANGE) {
-		buff = talloc_realloc_size(ctx, buff, talloc_array_length(buff) * 2);
-		if (!buff) {
-			talloc_free(buff);
-			return -1;
-		}
+		MEM(buff = talloc_realloc_size(ctx, buff, talloc_array_length(buff) * 2));
 	}
 
 	if ((ret != 0) || !*out) {
