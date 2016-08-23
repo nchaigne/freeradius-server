@@ -1515,13 +1515,9 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 		 *	Explicit list given: use it.
 		 */
 		clients_cs = cf_section_sub_find_name2(parent_cs, "clients", section_name);
+		if (!clients_cs) clients_cs = cf_section_sub_find(main_config.config, section_name);
 		if (!clients_cs) {
-			clients_cs = cf_section_sub_find(main_config.config, section_name);
-		}
-		if (!clients_cs) {
-			cf_log_err_cs(cs,
-				   "Failed to find clients %s {...}",
-				   section_name);
+			cf_log_err_cs(cs, "Failed to find clients %s {...}", section_name);
 			return -1;
 		}
 	} /* else there was no "clients = " entry. */
@@ -1529,9 +1525,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	/*
 	 *	Always cache the CONF_SECTION of the server.
 	 */
-	this->server_cs = cf_section_sub_find_name2(parent_cs,
-						    "server",
-						    this->server);
+	this->server_cs = cf_section_sub_find_name2(parent_cs, "server", this->server);
 	if (!this->server_cs) {
 		cf_log_err_cs(cs, "Failed to find virtual server '%s'", this->server);
 		return -1;
@@ -1543,11 +1537,12 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	 *	If there are no clients in this virtual server, then
 	 *	choose the global list of clients.
 	 */
-	if (!clients_cs &&
-	    (cf_section_sub_find(this->server_cs, "client") != NULL)) {
-		clients_cs = this->server_cs;
-	} else {
-		clients_cs = parent_cs;
+	if (!clients_cs) {
+		if (cf_section_sub_find(this->server_cs, "client") != NULL) {
+			clients_cs = this->server_cs;
+		} else {
+			clients_cs = parent_cs;
+		}
 	}
 
 #ifdef WITH_TLS

@@ -40,24 +40,28 @@ RCSID("$Id$")
 #endif
 #endif
 
+/** Group of clients
+ *
+ */
 struct radclient_list {
-	rbtree_t	*trees[129]; /* for 0..128, inclusive. */
+	char const	*name;			//!< Name of the client list.
+	rbtree_t	*trees[129];		//!< For 0..128, inclusive.
 	uint32_t       	min_prefix;
 };
 
-
 #ifdef WITH_STATS
-static rbtree_t		*tree_num = NULL;     /* client numbers 0..N */
+static rbtree_t		*tree_num = NULL;	//!< client numbers 0..N.
 static int		tree_num_max = 0;
 #endif
-static RADCLIENT_LIST	*root_clients = NULL;
+
+static RADCLIENT_LIST	*root_clients = NULL;	//!< Global client list.
 
 #ifdef WITH_DYNAMIC_CLIENTS
 static fr_fifo_t	*deleted_clients = NULL;
 #endif
 
-/*
- *	Callback for freeing a client.
+/** Free a client
+ *
  */
 void client_free(RADCLIENT *client)
 {
@@ -98,8 +102,8 @@ void client_free(RADCLIENT *client)
 	talloc_free(client);
 }
 
-/*
- *	Callback for comparing two clients.
+/** Compare clients by IP address
+ *
  */
 static int client_ipaddr_cmp(void const *one, void const *two)
 {
@@ -125,6 +129,9 @@ static int client_ipaddr_cmp(void const *one, void const *two)
 }
 
 #ifdef WITH_STATS
+/** Compare clients by number
+ *
+ */
 static int client_num_cmp(void const *one, void const *two)
 {
 	RADCLIENT const *a = one;
@@ -134,8 +141,8 @@ static int client_num_cmp(void const *one, void const *two)
 }
 #endif
 
-/*
- *	Free a RADCLIENT list.
+/** Free a client list and all clients in that list
+ *
  */
 void client_list_free(RADCLIENT_LIST *clients)
 {
@@ -167,8 +174,13 @@ void client_list_free(RADCLIENT_LIST *clients)
 	talloc_free(clients);
 }
 
-/*
- *	Return a new, initialized, set of clients.
+/** Return a new client list
+ *
+ * @note The container won't contain any clients.
+ *
+ * @return
+ *	- New client list on success.
+ *	- NULL on error (OOM).
  */
 RADCLIENT_LIST *client_list_init(CONF_SECTION *cs)
 {
@@ -176,6 +188,7 @@ RADCLIENT_LIST *client_list_init(CONF_SECTION *cs)
 
 	if (!clients) return NULL;
 
+	clients->name = talloc_strdup(clients, cs ? cf_section_name1(cs) : "root");
 	clients->min_prefix = 128;
 
 	return clients;
@@ -523,8 +536,9 @@ static const CONF_PARSER client_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-/** Create the linked list of clients from the new configuration type
+/** Create a list of clients from a client section
  *
+ * Iterates over all client definitions in the specified section, adding them to a client list.
  */
 #ifdef WITH_TLS
 RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, bool tls_required)
@@ -545,13 +559,25 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 	clients = cf_data_find(section, "clients");
 	if (clients) return clients;
 
+	/*
+	 *	Parent the client list from the section.
+	 */
 	clients = client_list_init(section);
 	if (!clients) return NULL;
 
+	/*
+	 *	If the section is hung off the config root, this is
+	 *	the global client list, else it's virtual server
+	 *	specific client list.
+	 */
 	if (cf_top_section(section) == section) global = true;
 
 	if (strcmp("server", cf_section_name1(section)) == 0) server_cs = section;
 
+	/*
+	 *	Iterate over all the clients in the section, adding
+	 *	them to the client list.
+	 */
 	for (cs = cf_subsection_find_next(section, NULL, "client");
 	     cs;
 	     cs = cf_subsection_find_next(section, cs, "client")) {
@@ -1480,10 +1506,18 @@ RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 	return c;
 }
 
-/*
- *	Read a client definition from the given filename.
+/** Read a single client from a file
+ *
+ * This function supports asynchronous runtime loading of clients.
+ *
+ * @param[in] filename		To read clients from.
+ * @param[in] server_cs		of virtual server clients should be added to.
+ * @param[in] check_dns		Check reverse lookup of IP address matches filename.
+ * @return
+ *	- The new client on success.
+ *	- NULL on failure.
  */
-RADCLIENT *client_read(char const *filename, CONF_SECTION *server_cs, int flag)
+RADCLIENT *client_read(char const *filename, CONF_SECTION *server_cs, bool check_dns)
 {
 	char const *p;
 	RADCLIENT *c;
@@ -1516,7 +1550,7 @@ RADCLIENT *client_read(char const *filename, CONF_SECTION *server_cs, int flag)
 		p = filename;
 	}
 
-	if (!flag) return c;
+	if (!check_dns) return c;
 
 	/*
 	 *	Additional validations

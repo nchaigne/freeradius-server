@@ -2342,7 +2342,7 @@ char *fr_pair_asprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 
 	value = fr_pair_value_asprint(ctx, vp, quote);
 
-	if (vp->da->flags.has_tag) {
+	if ((vp->da->flags.has_tag) && (vp->tag != TAG_ANY)) {
 		if (quote && (vp->da->type == PW_TYPE_STRING)) {
 			str = talloc_asprintf(ctx, "%s:%d %s %c%s%c", vp->da->name, vp->tag, token, quote, value, quote);
 		} else {
@@ -2674,6 +2674,8 @@ void fr_pair_list_verify(char const *file, int line, TALLOC_CTX *expected, VALUE
 	VALUE_PAIR		*slow, *fast;
 	TALLOC_CTX		*parent;
 
+	if (!vps) return;	/* Fast path */
+
 	fr_cursor_init(&fast_cursor, &vps);
 
 	for (slow = fr_cursor_init(&slow_cursor, &vps), fast = fr_cursor_init(&fast_cursor, &vps);
@@ -2686,9 +2688,8 @@ void fr_pair_list_verify(char const *file, int line, TALLOC_CTX *expected, VALUE
 		 */
 		fast = fr_cursor_next(&fast_cursor);
 		if (fast == slow) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: Looping list found.  "
-						 "Fast pointer hit slow pointer at \"%s\"",
-						 file, line, slow->da->name);
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: Looping list found.  Fast pointer hit "
+				     "slow pointer at \"%s\"", file, line, slow->da->name);
 			if (!fr_cond_assert(0)) fr_exit_now(1);
 		}
 
