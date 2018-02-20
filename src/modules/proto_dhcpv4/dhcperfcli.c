@@ -3,5 +3,5 @@
 
 int main(int argc, char **argv)
 {
-	print("hello...\n";
+	print("hello?\n";
 }
