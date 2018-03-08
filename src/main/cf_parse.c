@@ -866,13 +866,9 @@ static int cf_section_parse_init(CONF_SECTION *cs, void *base, CONF_PARSER const
 
 		  /*
 		   *	It's OK for this to be missing.  Don't
-		   *	initialize it.  BUT the caller MUST use the
-		   *	"is_set" flag.
+		   *	initialize it.
 		   */
-		  if ((rule->type & FR_TYPE_OK_MISSING) != 0) {
-			  rad_assert((rule->type & FR_TYPE_IS_SET) != 0);
-			  return 0;
-		  }
+		  if ((rule->type & FR_TYPE_OK_MISSING) != 0) return 0;
 
 		  /*
 		   *	If there's no subsection in the
@@ -1007,6 +1003,8 @@ static int cf_subsection_parse(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		}
 
 		if (out) *((uint8_t **)out) = buff;
+
+		return 0;
 	}
 
 	rad_assert(subcs_size);
@@ -1237,8 +1235,6 @@ int cf_section_parse_pass2(void *base, CONF_SECTION *cs)
 					}
 				}
 				continue;
-			} else if (rule->subcs_size) {
-				subcs_base = (*(uint8_t **)((uint8_t *)base) + rule->offset);
 			} else {
 				subcs_base = (uint8_t *)base + rule->offset;
 			}

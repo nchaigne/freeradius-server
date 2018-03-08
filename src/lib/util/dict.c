@@ -175,13 +175,13 @@ size_t const dict_attr_sizes[FR_TYPE_MAX + 1][2] = {
 	[FR_TYPE_IFID]		= {8, 8},
 	[FR_TYPE_ETHERNET]	= {6, 6},
 
-	[FR_TYPE_BOOL]	= {1, 1},
+	[FR_TYPE_BOOL]		= {1, 1},
 	[FR_TYPE_UINT8]		= {1, 1},
-	[FR_TYPE_UINT16]		= {2, 2},
+	[FR_TYPE_UINT16]	= {2, 2},
 	[FR_TYPE_UINT32]	= {4, 4},
 	[FR_TYPE_UINT64]	= {8, 8},
 	[FR_TYPE_SIZE]		= {sizeof(size_t), sizeof(size_t)},
-	[FR_TYPE_INT32]	= {4, 4},
+	[FR_TYPE_INT32]		= {4, 4},
 
 	[FR_TYPE_DATE]		= {4, 4},
 	[FR_TYPE_ABINARY]	= {32, ~0},
@@ -264,7 +264,7 @@ static void hash_pool_free(void *to_free)
 
 /** Apply a simple (case insensitive) hashing function to the name of an attribute, vendor or protocol
  *
- * @param[in] name of the attribute, vendor or protocol.
+ * @param[in] name	of the attribute, vendor or protocol.
  * @return the hashed derived from the name.
  */
 static uint32_t dict_hash_name(char const *name)
@@ -285,7 +285,7 @@ static uint32_t dict_hash_name(char const *name)
 
 /** Wrap name hash function for fr_dict_attr_t
  *
- * @param data fr_dict_attr_t to hash.
+ * @param data		fr_dict_attr_t to hash.
  * @return the hash derived from the name of the attribute.
  */
 static uint32_t dict_attr_name_hash(void const *data)
@@ -517,10 +517,10 @@ void fr_dict_dump(fr_dict_t *dict)
  * Inserts a vendor entry into the vendor hash table.  This must be done before adding
  * attributes under a VSA.
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[in] name of the vendor.
- * @param[in] num Vendor's Private Enterprise Number.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] name		of the vendor.
+ * @param[in] num		Vendor's Private Enterprise Number.
  * @return
  * 	- 0 on success.
  * 	- -1 on failure.
@@ -588,8 +588,8 @@ int fr_dict_vendor_add(fr_dict_t *dict, char const *name, unsigned int num)
 
 /** Add a child to a parent.
  *
- * @param parent we're adding a child to.
- * @param child to add to parent.
+ * @param parent	we're adding a child to.
+ * @param child		to add to parent.
  * @return
  *	- 0 on success.
  *	- -1 on failure (memory allocation error).
@@ -657,7 +657,7 @@ static inline int fr_dict_attr_child_add(fr_dict_attr_t *parent, fr_dict_attr_t 
 		}
 
 		if (child_is_struct && !bin_is_struct) break;
-		else if (child->vendor <= (*bin)->vendor) break;	/* Prioritise RFC attributes */
+		else if (fr_dict_vendor_num_by_da(child) <= fr_dict_vendor_num_by_da(*bin)) break;	/* Prioritise RFC attributes */
 		else if (child->attr <= (*bin)->attr) break;
 
 		bin = &(*bin)->next;
@@ -672,10 +672,11 @@ static inline int fr_dict_attr_child_add(fr_dict_attr_t *parent, fr_dict_attr_t 
 
 /** Build the tlv_stack for the specified DA and encode the path in OID form
  *
- * @param[out] out Where to write the OID.
- * @param[in] outlen Length of the output buffer.
- * @param[in] ancestor If not NULL, only print OID portion between ancestor and da.
- * @param[in] da to print OID string for.
+ * @param[out] out		Where to write the OID.
+ * @param[in] outlen		Length of the output buffer.
+ * @param[in] ancestor		If not NULL, only print OID portion between
+ *				ancestor and da.
+ * @param[in] da		to print OID string for.
  * @return the number of bytes written to the buffer.
  */
 size_t dict_print_attr_oid(char *out, size_t outlen,
@@ -728,8 +729,8 @@ size_t dict_print_attr_oid(char *out, size_t outlen,
 
 /** Grow or shrink a heap allocated fr_dict_attr_t and copy a new name string into its name buffer
  *
- * @param[in] da	to set a new name for.
- * @param[in] name	to set.
+ * @param[in] da		to set a new name for.
+ * @param[in] name		to set.
  * @return
  *	- 0 on success.
  *	- -1 on failure (memory allocation error).
@@ -756,20 +757,21 @@ static int fr_dict_attr_set_name(fr_dict_attr_t **da, char const *name)
 
 /** Allocate a dictionary attribute on the heap
  *
- * @param[in] ctx	to allocate the attribute in.
- * @param[in] parent	of the attribute, if none, should be the dictionary root.
- * @param[in] name	of the attribute.  If NULL an OID string will be created and set as the name.
- * @param[in] vendor	of the attribute.  Deprecated.
- * @param[in] attr	number.
- * @param[in] type	of the attribute.
- * @param[in] flags	to assign.
+ * @param[in] ctx		to allocate the attribute in.
+ * @param[in] parent		of the attribute, if none, should be
+ *				the dictionary root.
+ * @param[in] name		of the attribute.  If NULL an OID string
+ *				will be created and set as the name.
+ * @param[in] attr		number.
+ * @param[in] type		of the attribute.
+ * @param[in] flags		to assign.
  * @return
  *	- A new fr_dict_attr_t on success.
  *	- NULL on failure.
  */
 static fr_dict_attr_t *fr_dict_attr_alloc(TALLOC_CTX *ctx,
 					  fr_dict_attr_t const *parent,
-				   	  char const *name, unsigned int vendor, int attr,
+				   	  char const *name, int attr,
 				   	  fr_type_t type, fr_dict_attr_flags_t const *flags)
 {
 	fr_dict_attr_t *da;
@@ -784,7 +786,6 @@ static fr_dict_attr_t *fr_dict_attr_alloc(TALLOC_CTX *ctx,
 	talloc_set_type(da, fr_dict_attr_t);
 
 	da->attr = attr;
-	da->vendor = vendor;
 	da->type = type;
 	memcpy(&da->flags, flags, sizeof(*flags));
 	da->parent = parent;
@@ -821,13 +822,13 @@ static fr_dict_attr_t *fr_dict_attr_alloc(TALLOC_CTX *ctx,
  *
  * @todo we need to check length of none vendor attributes.
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[in] parent to add attribute under.
- * @param[in] name of the attribute.
- * @param[in] attr number.
- * @param[in] type of attribute.
- * @param[in] flags to set in the attribute.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] parent		to add attribute under.
+ * @param[in] name		of the attribute.
+ * @param[in] attr		number.
+ * @param[in] type		of attribute.
+ * @param[in] flags		to set in the attribute.
  * @return
  *	- fr_dict_attr_t on success
  *	- NULL on failure
@@ -835,7 +836,6 @@ static fr_dict_attr_t *fr_dict_attr_alloc(TALLOC_CTX *ctx,
 static fr_dict_attr_t *fr_dict_attr_add_by_name(fr_dict_t *dict, fr_dict_attr_t const *parent,
 						char const *name, int attr, fr_type_t type, fr_dict_attr_flags_t flags)
 {
-	unsigned int		vendor;
 	size_t			namelen;
 	fr_dict_attr_t		*n;
 	fr_dict_attr_t const	*v;
@@ -1402,16 +1402,7 @@ static fr_dict_attr_t *fr_dict_attr_add_by_name(fr_dict_t *dict, fr_dict_attr_t 
 		}
 	}
 
-	/*
-	 *	Propogate vendor down the attribute tree.
-	 */
-	if (parent->type == FR_TYPE_VENDOR) {
-		vendor = parent->attr;
-	} else {
-		vendor = parent->vendor;
-	}
-
-	n = fr_dict_attr_alloc(dict->pool, parent, name, vendor, attr, type, &flags);
+	n = fr_dict_attr_alloc(dict->pool, parent, name, attr, type, &flags);
 	if (!n) {
 	oom:
 		fr_strerror_printf("Out of memory");
@@ -1490,13 +1481,13 @@ static fr_dict_attr_t *fr_dict_attr_add_by_name(fr_dict_t *dict, fr_dict_attr_t 
  *
  * @todo we need to check length of none vendor attributes.
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[in] parent to add attribute under.
- * @param[in] name of the attribute.
- * @param[in] attr number.
- * @param[in] type of attribute.
- * @param[in] flags to set in the attribute.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] parent		to add attribute under.
+ * @param[in] name		of the attribute.
+ * @param[in] attr		number.
+ * @param[in] type		of attribute.
+ * @param[in] flags		to set in the attribute.
  * @return
  *	- 0 on success.
  *	- -1 on failure.
@@ -1530,12 +1521,15 @@ int fr_dict_attr_add(fr_dict_t *dict, fr_dict_attr_t const *parent,
  * @param[in] da		to add enumeration value to.
  * @param[in] alias		Name of value alias.
  * @param[in] value		to associate with alias.
- * @param[in] coerce		if the type of the value does not match the type of the da,
- *				attempt to cast it to match the type of the da.  If this is
- *				false and there's a type mismatch, we fail.
- *				We also fail if the value cannot be coerced to the attribute type.
- * @param[in] takes_precedence	This alias should take precedence over previous aliases for the
- *				same value, when resolving value to alias.
+ * @param[in] coerce		if the type of the value does not match the
+ *				type of the da, attempt to cast it to match
+ *				the type of the da.  If this is false and there's
+ *				a type mismatch, we fail.
+ *				We also fail if the value cannot be coerced to
+ *				the attribute type.
+ * @param[in] takes_precedence	This alias should take precedence over previous
+ *				aliases for the same value, when resolving value
+ *				to alias.
  * @return
  *	- 0 on success.
  *	- -1 on failure.
@@ -2580,7 +2574,7 @@ static int _dict_from_file(dict_from_file_ctx_t *ctx,
 					memset(&flags, 0, sizeof(flags));
 
 					memcpy(&mutable, &ctx->parent, sizeof(mutable));
-					new = fr_dict_attr_alloc(mutable, fr_dict_root(ctx->dict), "Vendor-Specific", 0,
+					new = fr_dict_attr_alloc(mutable, fr_dict_root(ctx->dict), "Vendor-Specific",
 								 FR_VENDOR_SPECIFIC, FR_TYPE_VSA, &flags);
 					fr_dict_attr_child_add(mutable, new);
 					vsa_da = new;
@@ -2614,8 +2608,7 @@ static int _dict_from_file(dict_from_file_ctx_t *ctx,
 				}
 
 				memcpy(&mutable, &vsa_da, sizeof(mutable));
-				new = fr_dict_attr_alloc(mutable, ctx->parent,
-							 argv[1], 0, vendor, FR_TYPE_VENDOR, &flags);
+				new = fr_dict_attr_alloc(mutable, ctx->parent, argv[1], vendor, FR_TYPE_VENDOR, &flags);
 				fr_dict_attr_child_add(mutable, new);
 
 				vendor_da = new;
@@ -2682,12 +2675,13 @@ static bool defined_cast_types = false;
  *
  * First dictionary initialised will be set as the default internal dictionary.
  *
- * @param[in] ctx to allocate the dictionary from.
- * @param[out] out Where to write a pointer to the new dictionary.  Will free existing
- *	dictionary if files have changed and *out is not NULL.
- * @param[in] dir to read dictionary files from.
- * @param[in] fn file name to read.
- * @param[in] name to use for the root attributes.
+ * @param[in] ctx		to allocate the dictionary from.
+ * @param[out] out		Where to write a pointer to the new dictionary.
+ *				Will free existing dictionary if files have
+ *				changed and *out is not NULL.
+ * @param[in] dir		to read dictionary files from.
+ * @param[in] fn		file name to read.
+ * @param[in] name		to use for the root attributes.
  * @return
  *	- 0 on success.
  *	- -1 on failure.
@@ -2790,7 +2784,7 @@ int fr_dict_from_file(TALLOC_CTX *ctx, fr_dict_t **out, char const *dir, char co
 			type_name = talloc_typed_asprintf(dict->pool, "Tmp-Cast-%s", p->name);
 
 			n = fr_dict_attr_alloc(dict->pool, dict->root, type_name,
-					       0, FR_CAST_BASE + p->number, p->number, &flags);
+					       FR_CAST_BASE + p->number, p->number, &flags);
 			if (!n) goto error;
 
 			if (!fr_hash_table_insert(dict->attributes_by_name, n)) goto error;
@@ -2908,7 +2902,7 @@ int fr_dict_parse_str(fr_dict_t *dict, char *buf, fr_dict_attr_t const *parent, 
 
 /** Return the root attribute of a dictionary
  *
- * @param dict to return root for.
+ * @param dict			to return root for.
  * @return the root attribute of the dictionary.
  */
 fr_dict_attr_t const *fr_dict_root(fr_dict_t const *dict)
@@ -2932,7 +2926,7 @@ fr_dict_attr_t *fr_dict_unknown_acopy(TALLOC_CTX *ctx, fr_dict_attr_t const *da)
 		parent = da->parent;
 	}
 
-	new = fr_dict_attr_alloc(ctx, parent, da->name, da->vendor, da->attr, da->type, &da->flags);
+	new = fr_dict_attr_alloc(ctx, parent, da->name, da->attr, da->type, &da->flags);
 	new->parent = parent;
 	new->depth = da->depth;
 
@@ -2948,9 +2942,9 @@ fr_dict_attr_t *fr_dict_unknown_acopy(TALLOC_CTX *ctx, fr_dict_attr_t const *da)
  *
  * Does not free old #fr_dict_attr_t, that is left up to the caller.
  *
- * @param[in] dict	of protocol context we're operating in.  If NULL the internal
- *			dictionary will be used.
- * @param[in] old	unknown attribute to add.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] old		unknown attribute to add.
  * @return
  *	- Existing #fr_dict_attr_t if old was found in a dictionary.
  *	- A new entry representing old.
@@ -2994,7 +2988,7 @@ fr_dict_attr_t const *fr_dict_unknown_add(fr_dict_t *dict, fr_dict_attr_t const 
 
 		if (fr_dict_vendor_add(dict, old->name, old->attr) < 0) return NULL;
 
-		n = fr_dict_attr_alloc(dict->pool, parent, old->name, old->vendor, old->attr, old->type, &flags);
+		n = fr_dict_attr_alloc(dict->pool, parent, old->name, old->attr, old->type, &flags);
 
 		/*
 		 *	Setup parenting for the attribute
@@ -3058,20 +3052,19 @@ void fr_dict_unknown_free(fr_dict_attr_t const **da)
 
 /** Initialises an unknown attribute
  *
- * Initialises a dict attr for an unknown attribute/vendor/type without adding
+ * Initialises a dict attr for an unknown attribute/type without adding
  * it to dictionary pools/hashes.
  *
  * Unknown attributes are used to transparently pass undecodeable attributes
  * when we proxy requests.
  *
- * @param[in,out] da struct to initialise, must be at least FR_DICT_ATTR_SIZE bytes.
- * @param[in] parent of the unknown attribute (may also be unknown).
- * @param[in] attr number.
- * @param[in] vendor number.
+ * @param[in,out] da		struct to initialise, must be at least
+ *				FR_DICT_ATTR_SIZE bytes.
+ * @param[in] parent		of the unknown attribute (may also be unknown).
+ * @param[in] attr		number.
  * @return 0 on success.
  */
-static int fr_dict_unknown_from_fields(fr_dict_attr_t *da, fr_dict_attr_t const *parent,
-				       unsigned int vendor, unsigned int attr)
+static int fr_dict_unknown_from_fields(fr_dict_attr_t *da, fr_dict_attr_t const *parent, unsigned int attr)
 {
 	char *p;
 	size_t len = 0;
@@ -3085,7 +3078,6 @@ static int fr_dict_unknown_from_fields(fr_dict_attr_t *da, fr_dict_attr_t const 
 	memset(da, 0, FR_DICT_ATTR_SIZE);
 
 	da->attr = attr;
-	da->vendor = vendor;
 	da->type = FR_TYPE_OCTETS;
 	da->flags.is_unknown = true;
 	da->flags.is_raw = true;
@@ -3111,10 +3103,10 @@ static int fr_dict_unknown_from_fields(fr_dict_attr_t *da, fr_dict_attr_t const 
  *	the correct EVS or VSA attribute. This is accessible via da->parent,
  *	and will be use the unknown da as its talloc parent.
  *
- * @param[in] ctx to allocate DA in.
- * @param[in] parent of the unknown attribute (may also be unknown).
- * @param[in] attr number.
- * @param[in] vendor number.
+ * @param[in] ctx		to allocate DA in.
+ * @param[in] parent		of the unknown attribute (may also be unknown).
+ * @param[in] attr		number.
+ * @param[in] vendor		number.
  * @return 0 on success.
  */
 fr_dict_attr_t const *fr_dict_unknown_afrom_fields(TALLOC_CTX *ctx, fr_dict_attr_t const *parent,
@@ -3175,7 +3167,7 @@ fr_dict_attr_t const *fr_dict_unknown_afrom_fields(TALLOC_CTX *ctx, fr_dict_attr
 		return NULL;
 	}
 
-	if (fr_dict_unknown_from_fields(n, parent, vendor, attr) < 0) {
+	if (fr_dict_unknown_from_fields(n, parent, attr) < 0) {
 		talloc_free(p);
 		parent = new_parent;	/* Stupid const rules */
 		fr_dict_unknown_free(&parent);
@@ -3216,9 +3208,10 @@ fr_dict_attr_t const *fr_dict_unknown_afrom_fields(TALLOC_CTX *ctx, fr_dict_attr
  *	use #fr_dict_unknown_free.
  *
  * @param[in] ctx to allocate the vendor attribute in.
- * @param[out] out Where to write point to new unknown dict attr representing the unknown vendor.
- * @param[in] parent of the vendor attribute, either an EVS or VSA attribute.
- * @param[in] vendor id.
+ * @param[out] out		Where to write point to new unknown dict attr
+ *				representing the unknown vendor.
+ * @param[in] parent		of the vendor attribute, either an EVS or VSA attribute.
+ * @param[in] vendor		id.
  * @return
  *	- 0 on success.
  *	- -1 on failure.
@@ -3248,7 +3241,7 @@ int fr_dict_unknown_vendor_afrom_num(TALLOC_CTX *ctx, fr_dict_attr_t **out,
 	case FR_TYPE_EVS:
 		if (!fr_cond_assert(!parent->flags.is_unknown)) return -1;
 
-		*out = fr_dict_attr_alloc(ctx, parent, NULL, 0, vendor, FR_TYPE_VENDOR, &flags);
+		*out = fr_dict_attr_alloc(ctx, parent, NULL, vendor, FR_TYPE_VENDOR, &flags);
 
 		return 0;
 
@@ -3272,10 +3265,10 @@ int fr_dict_unknown_vendor_afrom_num(TALLOC_CTX *ctx, fr_dict_attr_t **out,
  *
  * @copybrief fr_dict_unknown_from_fields
  *
- * @param[in] ctx	to allocate the attribute in.
- * @param[out] out	Where to write the new attribute to.
- * @param[in] parent	of the unknown attribute (may also be unknown).
- * @param[in] num	of the unknown attribute.
+ * @param[in] ctx		to allocate the attribute in.
+ * @param[out] out		Where to write the new attribute to.
+ * @param[in] parent		of the unknown attribute (may also be unknown).
+ * @param[in] num		of the unknown attribute.
  * @return
  *	- 0 on success.
  *	- -1 on failure.
@@ -3284,7 +3277,6 @@ static int fr_dict_unknown_attr_afrom_num(TALLOC_CTX *ctx, fr_dict_attr_t **out,
 				     	  fr_dict_attr_t const *parent, unsigned long num)
 {
 	fr_dict_attr_t		*da;
-	unsigned long		vendor = 0;
 	fr_dict_attr_flags_t	flags = {
 					.is_unknown = true,
 					.is_raw = true,
@@ -3298,9 +3290,7 @@ static int fr_dict_unknown_attr_afrom_num(TALLOC_CTX *ctx, fr_dict_attr_t **out,
 
 	*out = NULL;
 
-	if (parent->type == FR_TYPE_VENDOR) vendor = parent->attr;
-
-	da = fr_dict_attr_alloc(ctx, parent, NULL, vendor, num, FR_TYPE_OCTETS, &flags);
+	da = fr_dict_attr_alloc(ctx, parent, NULL, num, FR_TYPE_OCTETS, &flags);
 	if (!da) return -1;
 
 	*out = da;
@@ -3320,11 +3310,12 @@ static int fr_dict_unknown_attr_afrom_num(TALLOC_CTX *ctx, fr_dict_attr_t **out,
  *	the correct EVS or VSA attribute. This is accessible via vp->parent,
  *	and will be use the unknown da as its talloc parent.
  *
- * @param[in] ctx	to alloc new attribute in.
- * @param[out] out	Where to write the head of the chain unknown dictionary attributes.
- * @param[in] parent	Attribute to use as the root for resolving OIDs in.  Usually
- *			the root of a protocol dictionary.
- * @param[in] oid_str	of attribute.
+ * @param[in] ctx		to alloc new attribute in.
+ * @param[out] out		Where to write the head of the chain unknown
+ *				dictionary attributes.
+ * @param[in] parent		Attribute to use as the root for resolving OIDs in.
+ *				Usually the root of a protocol dictionary.
+ * @param[in] oid_str		of attribute.
  * @return
  *	- The number of bytes parsed on success.
  *	- <= 0 on failure.  Negative offset indicates parse error position.
@@ -3461,13 +3452,15 @@ ssize_t fr_dict_unknown_afrom_oid_str(TALLOC_CTX *ctx, fr_dict_attr_t **out,
  * Find the first invalid attribute name char in the string pointed to by name.
  *
  * Copy the characters between the start of the name string and the first none
- * #fr_dict_attr_allowed_chars char to a buffer and initialise da as an unknown attribute.
+ * #fr_dict_attr_allowed_chars char to a buffer and initialise da as an unknown
+ * attribute.
  *
- * @param[in] ctx	To allocate unknown #fr_dict_attr_t in.
- * @param[out] out	Where to write the head of the chain unknown dictionary attributes.
- * @param[in] parent	Attribute to use as the root for resolving OIDs in.  Usually
- *			the root of a protocol dictionary.
- * @param[in] name	string start.
+ * @param[in] ctx		To allocate unknown #fr_dict_attr_t in.
+ * @param[out] out		Where to write the head of the chain unknown
+ *				dictionary attributes.
+ * @param[in] parent		Attribute to use as the root for resolving OIDs in.
+ *				Usually the root of a protocol dictionary.
+ * @param[in] name		string start.
  * @return
  *	- <= 0 on failure.
  *	- The number of bytes of name consumed on success.
@@ -3508,8 +3501,8 @@ ssize_t fr_dict_unknown_afrom_oid_substr(TALLOC_CTX *ctx, fr_dict_attr_t **out,
 
 /** Check to see if we can convert a nested TLV structure to known attributes
  *
- * @param dict to search in.
- * @param da Nested tlv structure to convert.
+ * @param dict			to search in.
+ * @param da			Nested tlv structure to convert.
  * @return
  *	- NULL if we can't.
  *	- Known attribute if we can.
@@ -3623,7 +3616,7 @@ void fr_dict_print(fr_dict_attr_t const *da, int depth)
 
 	printf("%u%.*s%s \"%s\" vendor: %x (%u), num: %x (%u), type: %s, flags: %s\n", da->depth, depth,
 	       "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t", name, da->name,
-	       da->vendor, da->vendor, da->attr, da->attr,
+	       fr_dict_vendor_num_by_da(da), fr_dict_vendor_num_by_da(da), da->attr, da->attr,
 	       fr_int2str(dict_attr_types, da->type, "?Unknown?"), buff);
 
 	if (da->children) for (i = 0; i < talloc_array_length(da->children); i++) {
@@ -3637,9 +3630,9 @@ void fr_dict_print(fr_dict_attr_t const *da, int depth)
 
 /** Find a common ancestor that two TLV type attributes share
  *
- * @param a		first TLV attribute.
- * @param b		second TLV attribute.
- * @param is_ancestor	Enforce a->b relationship (a is parent or ancestor of b).
+ * @param a			first TLV attribute.
+ * @param b			second TLV attribute.
+ * @param is_ancestor		Enforce a->b relationship (a is parent or ancestor of b).
  * @return
  *	- Common ancestor if one exists.
  *	- NULL if no common ancestor exists.
@@ -3679,8 +3672,8 @@ fr_dict_attr_t const *fr_dict_parent_common(fr_dict_attr_t const *a, fr_dict_att
 
 /** Process a single OID component
  *
- * @param[out] out Value of component.
- * @param[in] oid string to parse.
+ * @param[out] out		Value of component.
+ * @param[in] oid		string to parse.
  * @return
  *	- 0 on success.
  *	- -1 on format error.
@@ -3720,12 +3713,12 @@ int fr_dict_oid_component(unsigned int *out, char const **oid)
  *	maximum depth we managed to resolve to, and attr will be the child
  *	we failed to resolve.
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[out] attr Number we parsed.
- * @param[in,out] parent attribute (or root of dictionary).  Will be updated to the parent
- *	directly beneath the leaf.
- * @param[in] oid string to parse.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[out] attr		Number we parsed.
+ * @param[in,out] parent	attribute (or root of dictionary).
+ *				Will be updated to the parent directly beneath the leaf.
+ * @param[in] oid		string to parse.
  * @return
  *	- > 0 on success (number of bytes parsed).
  *	- <= 0 on parse error (negative offset of parse error).
@@ -3818,7 +3811,7 @@ ssize_t fr_dict_attr_by_oid(fr_dict_t *dict, fr_dict_attr_t const **parent, unsi
  *	just uses the fr_dict_attr_t hierarchy and the talloc hierarchy to locate
  *	the dictionary (much much faster and more scalable).
  *
- * @param[in] da To get the containing dictionary for.
+ * @param[in] da		To get the containing dictionary for.
  * @return
  *	- The dictionary containing da.
  *	- NULL.
@@ -3846,9 +3839,9 @@ fr_dict_t *fr_dict_by_da(fr_dict_attr_t const *da)
 
 /** Look up a vendor by its name
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[in] name to search for.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] name		to search for.
  * @return
  *	- The vendor.
  *	- NULL if no vendor with that name was regitered for this protocol.
@@ -3872,9 +3865,9 @@ int fr_dict_vendor_by_name(fr_dict_t const *dict, char const *name)
 
 /** Look up a vendor by its PEN
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[in] vendorpec to search for.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] vendorpec		to search for.
  * @return
  *	- The vendor.
  *	- NULL if no vendor with that number was regitered for this protocol.
@@ -3890,11 +3883,31 @@ fr_dict_vendor_t const *fr_dict_vendor_by_num(fr_dict_t const *dict, int vendorp
 	return fr_hash_table_finddata(dict->vendors_by_num, &dv);
 }
 
+/** Look up a vendor by one of its child attributes
+ *
+ * @param[in] da	The vendor attribute.
+ * @return
+ *	- The vendor.
+ *	- NULL if no vendor with that number was regitered for this protocol.
+ */
+fr_dict_vendor_t const *fr_dict_vendor_by_da(fr_dict_attr_t const *da)
+{
+	fr_dict_t 		*dict;
+	fr_dict_vendor_t	dv;
+
+	dv.vendorpec = fr_dict_vendor_num_by_da(da);
+	if (!dv.vendorpec) return NULL;
+
+	dict = fr_dict_by_da(da);
+
+	return fr_hash_table_finddata(dict->vendors_by_num, &dv);
+}
+
 /** Return the vendor that parents this attribute
  *
  * @note Uses the dictionary hierachy to determine the parent
  *
- * @param[in] da The dictionary attribute to find parent for.
+ * @param[in] da		The dictionary attribute to find parent for.
  * @return
  *	- NULL if the attribute has no vendor.
  *	- A fr_dict_attr_t representing this attribute's associated vendor.
@@ -3977,9 +3990,9 @@ fr_dict_attr_t const *fr_dict_vendor_attr_by_num(fr_dict_t const *dict, unsigned
  * If the attribute does not exist, don't advance the pointer and return
  * NULL.
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[in,out] name string start.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in,out] name		string start.
  * @return
  * 	- Attribute matching name.
  *  	- NULL if no matching attribute could be found.
@@ -4024,9 +4037,9 @@ fr_dict_attr_t const *fr_dict_attr_by_name_substr(fr_dict_t const *dict, char co
  *
  * @note Unlike attribute numbers, attribute names are unique to the dictionary.
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[in] name of the attribute to locate.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] name		of the attribute to locate.
  * @return
  * 	- Attribute matching name.
  * 	- NULL if no matching attribute could be found.
@@ -4049,10 +4062,10 @@ fr_dict_attr_t const *fr_dict_attr_by_name(fr_dict_t const *dict, char const *na
  *
  * @note This is a deprecated function, new code should use #fr_dict_attr_child_by_num.
  *
- * @param[in] dict of protocol context we're operating in.  If NULL the internal
- *	dictionary will be used.
- * @param[in] vendor number of the attribute.
- * @param[in] attr number of the attribute.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] vendor		number of the attribute.
+ * @param[in] attr		number of the attribute.
  * @return
  * 	- Attribute matching vendor/attr.
  * 	- NULL if no matching attribute could be found.
@@ -4078,8 +4091,8 @@ fr_dict_attr_t const *fr_dict_attr_by_num(fr_dict_t *dict, unsigned int vendor, 
  *
  * @note Only works with FR_TYPE_COMBO_IP
  *
- * @param[in] da	to look for type variant of.
- * @param[in] type	Variant of attribute to lookup.
+ * @param[in] da		to look for type variant of.
+ * @param[in] type		Variant of attribute to lookup.
  * @return
  * 	- Attribute matching parent/attr/type.
  * 	- NULL if no matching attribute could be found.
@@ -4098,8 +4111,8 @@ fr_dict_attr_t const *fr_dict_attr_by_type(fr_dict_attr_t const *da, fr_type_t t
 
 /** Check if a child attribute exists in a parent using a pointer (da)
  *
- * @param parent to check for child in.
- * @param child to look for.
+ * @param parent		to check for child in.
+ * @param child			to look for.
  * @return
  *	- The child attribute on success.
  *	- NULL if the child attribute does not exist.
@@ -4139,8 +4152,8 @@ inline fr_dict_attr_t const *fr_dict_attr_child_by_da(fr_dict_attr_t const *pare
 
 /** Check if a child attribute exists in a parent using an attribute number
  *
- * @param parent to check for child in.
- * @param attr number to look for.
+ * @param parent		to check for child in.
+ * @param attr			number to look for.
  * @return
  *	- The child attribute on success.
  *	- NULL if the child attribute does not exist.
@@ -4180,10 +4193,10 @@ inline fr_dict_attr_t const *fr_dict_attr_child_by_num(fr_dict_attr_t const *par
 
 /** Lookup the structure representing an enum value in a #fr_dict_attr_t
  *
- * @param[in] dict	of protocol context we're operating in.
- *			If NULL the internal dictionary will be used.
- * @param[in] da	to search in.
- * @param[in] value to search for.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] da		to search in.
+ * @param[in] value		to search for.
  * @return
  * 	- Matching #fr_dict_enum_t.
  * 	- NULL if no matching #fr_dict_enum_t could be found.
@@ -4196,7 +4209,11 @@ fr_dict_enum_t *fr_dict_enum_by_value(fr_dict_t *dict, fr_dict_attr_t const *da,
 
 	INTERNAL_IF_NULL(dict);
 
-	if (!fr_cond_assert(value->type == da->type)) return NULL;
+	/*
+	 *	Could be NULL or an unknown attribute, in which case
+	 *	we want to avoid the lookup gracefully...
+	 */
+	if (value->type != da->type) return NULL;
 
 	/*
 	 *	First, look up aliases.
@@ -4218,10 +4235,10 @@ fr_dict_enum_t *fr_dict_enum_by_value(fr_dict_t *dict, fr_dict_attr_t const *da,
 
 /** Lookup the name of an enum value in a #fr_dict_attr_t
  *
- * @param[in] dict	of protocol context we're operating in.  If NULL the internal
- *			dictionary will be used.
- * @param[in] da	to search in.
- * @param[in] value	number to search for.
+ * @param[in] dict		of protocol context we're operating in.
+ *				If NULL the internal dictionary will be used.
+ * @param[in] da		to search in.
+ * @param[in] value		number to search for.
  * @return
  * 	- Name of value.
  * 	- NULL if no matching value could be found.
@@ -4307,7 +4324,7 @@ void fr_dict_verify(char const *file, int line, fr_dict_attr_t const *da)
 	if ((!da->flags.is_root) && (da->depth == 0)) {
 		FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: fr_dict_attr_t %s vendor: %i, attr %i: "
 			     "Is not root, but depth is 0",
-			     file, line, da->name, da->vendor, da->attr);
+			     file, line, da->name, fr_dict_vendor_num_by_da(da), da->attr);
 
 		if (!fr_cond_assert(0)) fr_exit_now(1);
 	}
@@ -4315,7 +4332,8 @@ void fr_dict_verify(char const *file, int line, fr_dict_attr_t const *da)
 	if (da->depth > FR_DICT_MAX_TLV_STACK) {
 		FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: fr_dict_attr_t %s vendor: %i, attr %i: "
 			     "Indicated depth (%u) greater than TLV stack depth (%u)",
-			     file, line, da->name, da->vendor, da->attr, da->depth, FR_DICT_MAX_TLV_STACK);
+			     file, line, da->name, fr_dict_vendor_num_by_da(da), da->attr,
+			     da->depth, FR_DICT_MAX_TLV_STACK);
 
 		if (!fr_cond_assert(0)) fr_exit_now(1);
 	}
@@ -4328,7 +4346,7 @@ void fr_dict_verify(char const *file, int line, fr_dict_attr_t const *da)
 		if (i != (int)da_p->depth) {
 			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: fr_dict_attr_t %s vendor: %i, attr %i: "
 				     "Depth out of sequence, expected %i, got %u",
-				     file, line, da->name, da->vendor, da->attr, i, da_p->depth);
+				     file, line, da->name, fr_dict_vendor_num_by_da(da), da->attr, i, da_p->depth);
 
 			if (!fr_cond_assert(0)) fr_exit_now(1);
 		}

@@ -56,13 +56,14 @@ typedef struct fr_radius_dynamic_client_t {
 	fr_trie_t			*trie;			//!< track networks for dynamic clients
 
 	RADCLIENT_LIST			*clients;		//!< local clients
-	RADCLIENT_LIST			*expired;		//!< expired local clients
+	RADCLIENT_LIST			*pending;		//!< pending local clients
+	RADCLIENT_LIST			*negative;		//!< negative cache of rejected clients
 
 	fr_dlist_t			packets;       		//!< list of accepted packets
-	fr_dlist_t			pending;		//!< pending clients
 
 	uint32_t			max_clients;		//!< maximum number of dynamic clients
 	uint32_t			num_clients;		//!< total number of active clients
+	uint32_t			num_negative_clients;	//!< how many clients are in the negative cache
 	uint32_t			max_pending_clients;	//!< maximum number of pending clients
 	uint32_t			num_pending_clients;	//!< number of pending clients
 	uint32_t			max_pending_packets;	//!< maximum accepted pending packets
@@ -427,7 +428,7 @@ redo:
 	 */
 	if (saved->timestamp != saved->track->timestamp) {
 	drop_packet:
-		(void) fr_radius_tracking_entry_delete(inst->ft, saved->track, saved->timestamp);
+		(void) fr_radius_tracking_entry_delete(saved->track->ft, saved->track, saved->timestamp);
 		((proto_radius_udp_address_t *)saved->track->src_dst)->client->received--;
 		talloc_free(saved);
 		goto redo;
@@ -581,27 +582,12 @@ static ssize_t dynamic_client_alloc(proto_radius_udp_t *inst, uint8_t *packet, s
 	 *	i.e. if the client takes 30s to define, well, too
 	 *	bad...
 	 */
-	if (!client_add(inst->dynamic_clients.clients, client)) {
+	if (!client_add(inst->dynamic_clients.pending, client)) {
 		talloc_free(client);
 		return -1;
 	}
 
-	fr_dlist_insert_tail(&inst->dynamic_clients.pending, &client->pending);
-
 	inst->dynamic_clients.num_pending_clients++;
-
-	/*
-	 *	Check for the case of renewing an expired client.  If
-	 *	so, delete it's expiration timer.
-	 *
-	 *	We'll do the same checks when we create or NAK the
-	 *	client in mod_write().  If it matches, we'll just
-	 *	renew the existing client, instead of defining a new
-	 *	one.  That allows for *renewal* instead of deletion
-	 *	and re-creation.
-	 */
-	client = client_find(inst->dynamic_clients.expired, &address->src_ipaddr, IPPROTO_UDP);
-	if (client && client->ev) (void) fr_event_timer_delete(inst->el, &client->ev);
 
 	return packet_len;
 }
@@ -621,8 +607,18 @@ static void dynamic_client_expire(UNUSED fr_event_list_t *el, UNUSED struct time
 	 */
 	if (client->expired) {
 		DEBUG("%s - deleting client %s.", inst->name, client->shortname);
-		(void) client_delete(inst->dynamic_clients.expired, client);
 		rad_assert(client->outstanding == 0);
+		client_free(client);
+		return;
+	}
+
+	/*
+	 *	It's a negative cache entry.  Just delete it.
+	 */
+	if (client->negative) {
+		rad_assert(client->outstanding == 0);
+		client_delete(inst->dynamic_clients.negative, client);
+		inst->dynamic_clients.num_negative_clients--;
 		client_free(client);
 		return;
 	}
@@ -634,7 +630,6 @@ static void dynamic_client_expire(UNUSED fr_event_list_t *el, UNUSED struct time
 	 */
 	client->expired = true;
 	client_delete(inst->dynamic_clients.clients, client);
-	client_add(inst->dynamic_clients.expired, client);
 
 	/*
 	 *	There are no active requests using this client.  It
@@ -741,7 +736,8 @@ static proto_radius_udp_t *mod_clone(proto_radius_udp_t *inst, proto_radius_udp_
 	child->child.src_port = address->src_port;
 
 	child->dynamic_clients.clients = NULL;
-	child->dynamic_clients.expired = NULL;
+	child->dynamic_clients.pending = NULL;
+	child->dynamic_clients.negative = NULL;
 	child->dynamic_clients.trie = NULL;
 
 	child->child.client = client_clone(child, address->client);
@@ -933,7 +929,7 @@ check_dynamic:
 }
 
 
-static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time, uint8_t *buffer, size_t buffer_len, size_t *leftover, uint32_t *priority)
+static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time, uint8_t *buffer, size_t buffer_len, size_t *leftover, uint32_t *priority, bool *is_dup)
 {
 	proto_radius_udp_t		*inst = talloc_get_type_abort(instance, proto_radius_udp_t);
 
@@ -947,6 +943,7 @@ static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time
 	proto_radius_udp_address_t	address;
 
 	*leftover = 0;		/* always for UDP */
+	*is_dup = false;
 	track = NULL;
 
 	/*
@@ -1055,6 +1052,22 @@ static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time
 	if (!address.client) address.client = client_find(inst->dynamic_clients.clients, &address.src_ipaddr, IPPROTO_UDP);
 
 	/*
+	 *	Still no client, maybe it's pending?
+	 *
+	 *	If it's pending, save the packet for later processing and return.
+	 */
+	if (!address.client) {
+		address.client = client_find(inst->dynamic_clients.pending, &address.src_ipaddr, IPPROTO_UDP);
+		if (address.client) {
+			if (dynamic_client_packet_save(inst, buffer, packet_len, packet_time, &address, &track) < 0) {
+				goto unknown;
+			}
+
+			return 0;
+		}
+	}
+
+	/*
 	 *	Still no client (and we have dynamic clients), try to
 	 *	define the client.
 	 */
@@ -1086,25 +1099,6 @@ static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time
 		 *	dynamic_client_alloc().
 		 */
 		goto return_packet;
-	}
-
-	/*
-	 *	The client is a negative cache entry.  Complain that
-	 *	it's unknown.
-	 */
-	if (address.client->negative) goto unknown;
-
-	/*
-	 *	It's a dynamic client, BUT not yet active.  Go save
-	 *	the packet until the client definition comes back
-	 *	either yay or nay.
-	 */
-	if (address.client->dynamic && !address.client->active) {
-		if (dynamic_client_packet_save(inst, buffer, packet_len, packet_time, &address, &track) < 0) {
-			goto unknown;
-		}
-
-		return 0;
 	}
 
 	/*
@@ -1221,18 +1215,16 @@ static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time
 			 *	updating the "packet recv time" to be when the
 			 *	original packet was received.
 			 *
-			 *	@todo - we still have ordering issues!  The
-			 *	original packet MAY be done before this packet
-			 *	gets to the worker.  So the this packet ALSO
-			 *	needs to be marked up as "dup".  So that the
-			 *	worker just sends a new reply if it's
-			 *	available?  Instead of re-processing this
-			 *	packet... at which point we find that what we
-			 *	think is a new packet isn't really, and we
-			 *	already have track->reply... so we've done
-			 *	unnecessary (possibly wrong) work.
+			 *	We still have ordering issue.  The
+			 *	original packet MAY be done before
+			 *	this packet gets to the worker.  So
+			 *	the this packet is ALSO marked up as
+			 *	"dup".  The worker will then ignore
+			 *	the duplicate packet if it's already
+			 *	sent a reply.
 			 */
 			packet_time = track->timestamp;
+			*is_dup = true;
 			break;
 
 			/*
@@ -1369,15 +1361,24 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 	 */
 	if (inst->dynamic_clients_is_set && address->client->dynamic && !address->client->active) {
 		RADCLIENT *client = address->client;
-		RADCLIENT *newclient, *expired = NULL;
+		RADCLIENT *newclient;
 		fr_dlist_t *entry;
 		dynamic_packet_t *saved;
 
 		/*
-		 *	@todo - maybe just duplicate the new client fields,
-		 *	and talloc_free(newclient).
+		 *	@todo - maybe just duplicate the new client
+		 *	fields, and talloc_free(newclient).  That
+		 *	means we don't have to muck with pending
+		 *	packets.
 		 */
 		inst->dynamic_clients.num_pending_clients--;
+
+		/*
+		 *	Delete the "pending" client from the pending
+		 *	client list.  Whatever we do next, this client
+		 *	is no longer "pending".
+		 */
+		client_delete(inst->dynamic_clients.pending, address->client);
 
 		/*
 		 *	NAK: drop all packets.
@@ -1386,30 +1387,20 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 		 *	IP to a negative cache as a DoS prevention.
 		 */
 		if (buffer_len == 1) {
-			client->negative = true;
+			if ((inst->dynamic_clients.num_negative_clients <= 1024) &&
+			    client_add(inst->dynamic_clients.negative, client)) {
+				client->negative = true;
+				inst->dynamic_clients.num_negative_clients++;
+			}
 
 		nak:
 			while ((entry = FR_DLIST_FIRST(client->packets)) != NULL) {
 				saved = fr_ptr_to_type(dynamic_packet_t, entry, entry);
 				(void) talloc_get_type_abort(saved, dynamic_packet_t);
-				(void) fr_radius_tracking_entry_delete(inst->ft, saved->track, saved->timestamp);
+				(void) fr_radius_tracking_entry_delete(saved->track->ft, saved->track, saved->timestamp);
 				fr_dlist_remove(&saved->entry);
 				talloc_free(saved);
 				inst->dynamic_clients.num_pending_packets--;
-			}
-
-			/*
-			 *	If we were renewing an expired client,
-			 *	then delete the expired one, and add
-			 *	the new definition.
-			 */
-			if (!expired) {
-				expired = client_find(inst->dynamic_clients.expired, &client->ipaddr, IPPROTO_UDP);
-				if (expired) {
-					rad_assert(expired->outstanding == 0);
-					client_delete(inst->dynamic_clients.expired, expired);
-					talloc_free(expired);
-				}
 			}
 
 			/*
@@ -1423,7 +1414,6 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 
 		rad_assert(buffer_len == sizeof(newclient));
 		memcpy(&newclient, buffer, sizeof(newclient));
-		FR_DLIST_INIT(newclient->pending);
 		FR_DLIST_INIT(newclient->packets);
 
 		/*
@@ -1440,71 +1430,21 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 		 */
 		rad_assert(!inst->use_connected);
 
-		/*
-		 *	Delete the "pending" client from the client list.
-		 */
-		client_delete(inst->dynamic_clients.clients, client);
+		DEBUG("%s - Defining new client %s", inst->name, client->shortname);
+		newclient->dynamic = true;
 
 		/*
-		 *	See if we had a previously expired client.  If
-		 *	not, just create a new one.
+		 *	If we can't add it, then clean it up.  BUT
+		 *	allow other packets to come from the same IP.
 		 */
-		expired = client_find(inst->dynamic_clients.expired, &newclient->ipaddr, IPPROTO_UDP);
-		if (!expired) {
-			DEBUG("%s - Defining new client %s", inst->name, client->shortname);
-			newclient->dynamic = true;
-
-			/*
-			 *	If we can't add it, then clean it up.  BUT
-			 *	allow other packets to come from the same IP.
-			 */
-			if (!client_add(inst->dynamic_clients.clients, newclient)) {
-				talloc_free(newclient);
-				client->negative = false;
-				goto nak;
-			}
-
-			newclient->active = true;
-			inst->dynamic_clients.num_clients++;
-
-		} else {
-			ssize_t elen, nlen;
-
-			elen = talloc_array_length(expired->secret);
-			nlen = talloc_array_length(newclient->secret);
-
-			/*
-			 *	Catch stupid administrator issues.
-			 */
-			if ((elen != nlen) || (memcmp(expired->secret, newclient->secret, elen) != 0)) {
-				ERROR("Shared secret for clients cannot be changed until all outstanding packets have been processed");
-				expired->active = false;
-				goto nak;
-			}
-
-			if (fr_ipaddr_cmp(&expired->ipaddr, &newclient->ipaddr) != 0) {
-				ERROR("IP / netmask for clients cannot be changed until all outstanding packets have been processed");
-				expired->active = false;
-				goto nak;
-			}
-
-			DEBUG("%s - Renewing client %s", inst->name, expired->shortname);
-			rad_assert(expired->ev == NULL);
-
+		if (!client_add(inst->dynamic_clients.clients, newclient)) {
 			talloc_free(newclient);
-			newclient = expired;
-			newclient->expired = false;
-
-			client_delete(inst->dynamic_clients.expired, expired);
-			if (!client_add(inst->dynamic_clients.clients, newclient)) {
-				talloc_free(newclient);
-				newclient->negative = false;
-				goto nak;
-			}
-
-			rad_assert(newclient->active == true);
-			rad_assert(newclient->negative == false);
+			client->negative = false;
+			goto nak;
 		}
+
+		newclient->active = true;
+		inst->dynamic_clients.num_clients++;
 
 		/*
 		 *	Move the packets over to the pending list, and
@@ -1532,7 +1472,6 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 		 *	client.
 		 */
 		dynamic_client_timer(inst, newclient, inst->dynamic_clients.lifetime);
-		fr_dlist_remove(&client->pending);
 		talloc_free(client);
 
 		/*
@@ -1559,7 +1498,7 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 	if ((track->timestamp != request_time) || !address->client) {
 		inst->stats.total_packets_dropped++;
 		DEBUG3("Suppressing reply as we have a newer packet");
-		(void) fr_radius_tracking_entry_delete(inst->ft, track, request_time);
+		(void) fr_radius_tracking_entry_delete(track->ft, track, request_time);
 		return buffer_len;
 	}
 
@@ -1634,7 +1573,7 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 		if (data_size < 0) {
 		done:
 			if (track->ev) (void) fr_event_timer_delete(inst->el, &track->ev);
-			(void) fr_radius_tracking_entry_delete(inst->ft, track, request_time);
+			(void) fr_radius_tracking_entry_delete(track->ft, track, request_time);
 			return data_size;
 		}
 
@@ -1667,7 +1606,7 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 	/*
 	 *	Add the reply to the tracking entry.
 	 */
-	if (fr_radius_tracking_entry_reply(inst->ft, track, reply_time,
+	if (fr_radius_tracking_entry_reply(track->ft, track, reply_time,
 					   buffer, buffer_len) < 0) {
 		DEBUG3("Failed adding reply to tracking table");
 		goto done;
@@ -2079,14 +2018,14 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 			return -1;
 		}
 
-		FR_DLIST_INIT(inst->dynamic_clients.pending);
 		FR_DLIST_INIT(inst->dynamic_clients.packets);
 
 		/*
 		 *	Allow static clients for this virtual server.
 		 */
 		inst->dynamic_clients.clients = client_list_init(NULL); // client_list_parse_section(inst->parent->server_cs, false);
-		inst->dynamic_clients.expired = client_list_init(NULL);
+		inst->dynamic_clients.pending = client_list_init(NULL);
+		inst->dynamic_clients.negative = client_list_init(NULL);
 
 		FR_INTEGER_BOUND_CHECK("max_clients", inst->dynamic_clients.max_clients, >=, 1);
 		FR_INTEGER_BOUND_CHECK("max_clients", inst->dynamic_clients.max_clients, <=, (1 << 20));
@@ -2199,7 +2138,6 @@ static int mod_detach(void *instance)
 
 	if (inst->dynamic_clients_is_set) {
 		TALLOC_FREE(inst->dynamic_clients.clients);
-		TALLOC_FREE(inst->dynamic_clients.expired);
 		TALLOC_FREE(inst->dynamic_clients.trie);
 	}
 

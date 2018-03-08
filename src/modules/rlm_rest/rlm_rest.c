@@ -969,10 +969,11 @@ static int mod_thread_instantiate(CONF_SECTION const *conf, void *instance, fr_e
  * Destroys all curl easy handles, and then the multihandle associated
  * with this thread.
  *
+ * @param[in] el	for this thread.
  * @param[in] thread	specific data to destroy.
  * @return 0
  */
-static int mod_thread_detach(void *thread)
+static int mod_thread_detach(UNUSED fr_event_list_t *el, void *thread)
 {
 	rlm_rest_thread_t	*t = thread;
 

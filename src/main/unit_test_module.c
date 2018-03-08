@@ -176,7 +176,7 @@ static REQUEST *request_from_file(FILE *fp, fr_event_list_t *el, RADCLIENT *clie
 			vp->type = VT_DATA;
 		}
 
-		if (!vp->da->vendor) switch (vp->da->attr) {
+		if (fr_dict_attr_is_top_level(vp->da)) switch (vp->da->attr) {
 		default:
 			break;
 
@@ -821,8 +821,17 @@ int main(int argc, char *argv[])
 	/*
 	 *	Setup dummy virtual server
 	 */
-	cf_section_add(main_config.config, cf_section_alloc(main_config.config,
-							    main_config.config, "server", "unit_test"));
+	{
+		CONF_SECTION	*server;
+		CONF_PAIR	*namespace;
+
+		server = cf_section_alloc(main_config.config, main_config.config, "server", "unit_test");
+		cf_section_add(main_config.config, server);
+
+		namespace = cf_pair_alloc(main_config.config, "namespace", "unit_test_module",
+					  T_OP_EQ, T_BARE_WORD, T_BARE_WORD);
+		cf_pair_add(server, namespace);
+	}
 
 	/*
 	 *	Initialise the interpreter, registering operations.
