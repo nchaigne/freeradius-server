@@ -1303,7 +1303,7 @@ int tmpl_define_undefined_attr(vp_tmpl_t *vpt, fr_type_t type, fr_dict_attr_flag
 
 	if (vpt->type != TMPL_TYPE_ATTR_UNDEFINED) return 1;
 
-	if (fr_dict_attr_add(NULL, fr_dict_root(fr_dict_internal), vpt->tmpl_unknown_name, -1, type, *flags) < 0) {
+	if (fr_dict_attr_add(NULL, fr_dict_root(fr_dict_internal), vpt->tmpl_unknown_name, -1, type, flags) < 0) {
 		return -1;
 	}
 	da = fr_dict_attr_by_name(NULL, vpt->tmpl_unknown_name);
@@ -2213,7 +2213,11 @@ VALUE_PAIR *tmpl_cursor_init(int *err, fr_cursor_t *cursor, REQUEST *request, vp
 	if (!vp) {
 		if (err) {
 			*err = -1;
-			fr_strerror_printf("No matching \"%s\" pairs found", vpt->tmpl_da->name);
+			if (vpt->type == TMPL_TYPE_LIST) {
+				fr_strerror_printf("List \"%s\" is empty", vpt->name);
+			} else {
+				fr_strerror_printf("No matching \"%s\" pairs found", vpt->tmpl_da->name);
+			}
 		}
 		return NULL;
 	}

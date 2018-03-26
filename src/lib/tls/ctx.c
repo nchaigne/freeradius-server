@@ -103,6 +103,173 @@ static int ctx_dh_params_load(SSL_CTX *ctx, char *file)
 	return 0;
 }
 
+static int tls_ctx_load_cert_chain(SSL_CTX *ctx, fr_tls_chain_conf_t const *chain)
+{
+	char		*password;
+
+	/*
+	 *	Conf parser should ensure they're both populated
+	 */
+	rad_assert(chain->certificate_file && chain->private_key_file);
+
+	/*
+	 *	Set the password (this should have been retrieved earlier)
+	 */
+	memcpy(&password, &chain->password, sizeof(password));
+	SSL_CTX_set_default_passwd_cb_userdata(ctx, password);
+
+	/*
+	 *	Always set the callback as it provides useful debug
+	 *	output if the certificate isn't set.
+	 */
+	SSL_CTX_set_default_passwd_cb(ctx, tls_session_password_cb);
+
+	switch (chain->file_format) {
+	case SSL_FILETYPE_PEM:
+		if (!(SSL_CTX_use_certificate_chain_file(ctx, chain->certificate_file))) {
+			tls_log_error(NULL, "Failed reading certificate file \"%s\"",
+				      chain->certificate_file);
+			return -1;
+		}
+		break;
+
+	case SSL_FILETYPE_ASN1:
+		if (!(SSL_CTX_use_certificate_file(ctx, chain->certificate_file, chain->file_format))) {
+			tls_log_error(NULL, "Failed reading certificate file \"%s\"",
+				      chain->certificate_file);
+			return -1;
+		}
+		break;
+
+	default:
+		rad_assert(0);
+		break;
+	}
+
+	if (!(SSL_CTX_use_PrivateKey_file(ctx, chain->private_key_file, chain->file_format))) {
+		tls_log_error(NULL, "Failed reading private key file \"%s\"",
+			      chain->private_key_file);
+		return -1;
+	}
+
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+	{
+		size_t		extra_cnt, i;
+		/*
+		 *	Load additional chain certificates from other files
+		 *	This allows us to specify chains in DER format as
+		 *	well as PEM, and means we can keep the intermediaries
+		 *	CAs and client/server certs in separate files.
+		 */
+		extra_cnt = talloc_array_length(chain->ca_files);
+		for (i = 0; i < extra_cnt; i++) {
+			FILE		*fp;
+			X509		*cert;
+			char const	*filename = chain->ca_files[i];
+
+			fp = fopen(filename, "r");
+			if (!fp) {
+				ERROR("Failed opening ca_file \"%s\": %s", filename, fr_syserror(errno));
+				return -1;
+			}
+
+			/*
+			 *	Load the PEM encoded X509 certificate
+			 */
+			switch (chain->file_format) {
+			case SSL_FILETYPE_PEM:
+				cert = PEM_read_X509(fp, NULL, NULL, NULL);
+				break;
+
+			case SSL_FILETYPE_ASN1:
+				cert = d2i_X509_fp(fp, NULL);
+				break;
+
+			default:
+				rad_assert(0);
+				fclose(fp);
+				return -1;
+			}
+			fclose(fp);
+
+			if (!cert) {
+				tls_log_error(NULL, "Failed reading certificate file \"%s\"", filename);
+				return -1;
+			}
+			SSL_CTX_add0_chain_cert(ctx, cert);
+		}
+	}
+#endif
+
+	/*
+	 *	Check if the last loaded private key matches the last
+	 *	loaded certificate.
+	 *
+	 *	Note: The call to SSL_CTX_use_certificate_chain_file
+	 *	can load in a private key too.
+	 */
+	if (!SSL_CTX_check_private_key(ctx)) {
+		ERROR("Private key does not match the certificate public key");
+		return -1;
+	}
+
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+	{
+		int mode = SSL_BUILD_CHAIN_FLAG_CHECK;
+
+		if (!chain->include_root_ca) mode |= SSL_BUILD_CHAIN_FLAG_NO_ROOT;
+
+		/*
+		 *	Explicitly check that the certificate chain
+		 *	we just loaded is sane.
+		 *
+		 *	This operates on the last loaded certificate.
+		 */
+		switch (chain->verify_mode) {
+		case FR_TLS_CHAIN_VERIFY_NONE:
+			mode |= SSL_BUILD_CHAIN_FLAG_CLEAR_ERROR | SSL_BUILD_CHAIN_FLAG_IGNORE_ERROR;
+			(void)SSL_CTX_build_cert_chain(ctx, mode);
+			break;
+
+		/*
+		 *	Seems to be a bug where
+		 *	SSL_BUILD_CHAIN_FLAG_IGNORE_ERROR trashes the error,
+		 *	so have the function fail as normal.
+		 */
+		case FR_TLS_CHAIN_VERIFY_SOFT:
+			if (!SSL_CTX_build_cert_chain(ctx, mode)) {
+				tls_strerror_printf(NULL);
+				PWARN("Failed verifying chain");
+			}
+			break;
+
+		case FR_TLS_CHAIN_VERIFY_HARD:
+			if (!SSL_CTX_build_cert_chain(ctx, mode)) {
+				tls_strerror_printf(NULL);
+				PERROR("Failed verifying chain");
+			}
+			break;
+
+		default:
+			break;
+		}
+	}
+#endif
+	return 0;
+}
+
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+static void _tls_ctx_print_cert_line(int index, X509 *cert)
+{
+	char		subject[1024];
+
+	X509_NAME_oneline(X509_get_subject_name(cert), subject, sizeof(subject));
+	subject[sizeof(subject) - 1] = '\0';
+
+	DEBUG3("[%i] %s %s", index, tls_utils_x509_pkey_type(cert), subject);
+}
+#endif
+
 /** Create SSL context
  *
  * - Load the trusted CAs
@@ -119,9 +286,12 @@ SSL_CTX *tls_ctx_alloc(fr_tls_conf_t const *conf, bool client)
 {
 	SSL_CTX		*ctx;
 	X509_STORE	*cert_vpstore;
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+	X509_STORE	*chain_store;
+	X509_STORE 	*verify_store;
+#endif
 	int		verify_mode = SSL_VERIFY_NONE;
 	int		ctx_options = 0;
-	int		type;
 	void		*app_data_index;
 
 	ctx = SSL_CTX_new(SSLv23_method()); /* which is really "all known SSL / TLS methods".  Idiots. */
@@ -140,23 +310,6 @@ SSL_CTX *tls_ctx_alloc(fr_tls_conf_t const *conf, bool client)
 	/*
 	 *	Identify the type of certificates that needs to be loaded
 	 */
-	if (conf->file_type) {
-		type = SSL_FILETYPE_PEM;
-	} else {
-		type = SSL_FILETYPE_ASN1;
-	}
-
-	/*
-	 *	Set the private key password (this should have been retrieved earlier)
-	 */
-	{
-		char *password;
-
-		memcpy(&password, &conf->private_key_password, sizeof(password));
-		SSL_CTX_set_default_passwd_cb_userdata(ctx, password);
-		SSL_CTX_set_default_passwd_cb(ctx, tls_session_password_cb);
-	}
-
 #ifdef PSK_MAX_IDENTITY_LEN
 	if (!client) {
 		/*
@@ -195,9 +348,7 @@ SSL_CTX *tls_ctx_alloc(fr_tls_conf_t const *conf, bool client)
 		size_t psk_len, hex_len;
 		uint8_t buffer[PSK_MAX_PSK_LEN];
 
-		if (conf->certificate_file ||
-		    conf->private_key_password || conf->private_key_file ||
-		    conf->ca_file || conf->ca_path) {
+		if (conf->chains || conf->ca_file || conf->ca_path) {
 			ERROR("When PSKs are used, No certificate configuration is permitted");
 			return NULL;
 		}
@@ -229,52 +380,52 @@ SSL_CTX *tls_ctx_alloc(fr_tls_conf_t const *conf, bool client)
 #endif
 
 	/*
-	 *	Load our keys and certificates
-	 *
-	 *	If certificates are of type PEM then we can make use
-	 *	of cert chain authentication using openssl api call
-	 *	SSL_CTX_use_certificate_chain_file.  Please see how
-	 *	the cert chain needs to be given in PEM from
-	 *	openSSL.org
+	 *	Set mode before processing any certifictes
 	 */
-	if (!conf->certificate_file) goto load_ca;
+	{
+		int mode = 0;
 
-	if (type == SSL_FILETYPE_PEM) {
-		if (!(SSL_CTX_use_certificate_chain_file(ctx, conf->certificate_file))) {
-			tls_log_error(NULL, "Failed reading certificate file \"%s\"",
-				      conf->certificate_file);
-			return NULL;
+		/*
+		 *	OpenSSL will automatically create certificate chains,
+		 *	unless we tell it to not do that.  The problem is that
+		 *	it sometimes gets the chains right from a certificate
+		 *	signature view, but wrong from the clients view.
+		 */
+		if (!conf->auto_chain) mode |= SSL_MODE_NO_AUTO_CHAIN;
+
+		if (client) {
+			mode |= SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER;
+			mode |= SSL_MODE_AUTO_RETRY;
 		}
 
-	} else {
-		if (!(SSL_CTX_use_certificate_file(ctx, conf->certificate_file, type))) {
-			tls_log_error(NULL, "Failed reading certificate file \"%s\"",
-				      conf->certificate_file);
-			return NULL;
-		}
+		if (mode) SSL_CTX_set_mode(ctx, mode);
 	}
 
-	if (conf->private_key_file) {
-		if (!(SSL_CTX_use_PrivateKey_file(ctx, conf->private_key_file, type))) {
-			tls_log_error(NULL, "Failed reading private key file \"%s\"",
-				      conf->private_key_file);
-			return NULL;
-		}
-	}
-
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
 	/*
-	 *	Check if the loaded private key is the right one
+	 *	If we're using a sufficiently new version of
+	 *	OpenSSL, initialise different stores for creating
+	 *	the certificate chains we present, and for
+	 *	holding certificates to verify the chain presented
+	 *	by the peer.
 	 *
-	 *	Note: The call to SSL_CTX_use_certificate_chain_file
-	 *	can load in a private key too.
+	 *	If we don't do this, a single store is used for
+	 *	both functions, which is confusing and annoying.
+	 *
+	 *	We use the set0 variant so that the stores are
+	 *	freed at the same time as the SSL_CTX.
 	 */
-	if (!SSL_CTX_check_private_key(ctx)) {
-		ERROR("Private key does not match the certificate public key");
-		return NULL;
-	}
+	if (!conf->auto_chain) {
+		MEM(chain_store = X509_STORE_new());
+		SSL_CTX_set0_chain_cert_store(ctx, chain_store);
 
-	/* Load the CAs we trust */
-load_ca:
+		MEM(verify_store = X509_STORE_new());
+		SSL_CTX_set0_verify_cert_store(ctx, verify_store);
+	}
+#endif
+	/*
+	 *	Load the CAs we trust
+	 */
 	if (conf->ca_file || conf->ca_path) {
 		if (!SSL_CTX_load_verify_locations(ctx, conf->ca_file, conf->ca_path)) {
 			tls_log_error(NULL, "Failed reading Trusted root CA list \"%s\"",
@@ -282,6 +433,100 @@ load_ca:
 			return NULL;
 		}
 	}
+
+	/*
+	 *	Load our certificate chains and keys
+	 */
+	if (conf->chains) {
+		size_t chains_conf = talloc_array_length(conf->chains);
+
+		/*
+		 *	Load our keys and certificates
+		 *
+		 *	If certificates are of type PEM then we can make use
+		 *	of cert chain authentication using openssl api call
+		 *	SSL_CTX_use_certificate_chain_file.  Please see how
+		 *	the cert chain needs to be given in PEM from
+		 *	openSSL.org
+		 */
+		{
+			size_t i;
+
+			for (i = 0; i < chains_conf; i++) {
+				if (tls_ctx_load_cert_chain(ctx, conf->chains[i]) < 0) return NULL;
+			}
+		}
+
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+		/*
+		 *	Print out our certificate chains.
+		 *
+		 *	There may be up to three, one for RSA, DH, DSA and EC.
+		 *	OpenSSL internally and transparently stores completely
+		 *	separate and distinct RSA/DSA/DH/ECC key pairs and chains.
+		 */
+		if (DEBUG_ENABLED2) {
+			size_t chains_set = 0;
+			int ret;
+
+			/*
+			 *	Iterate over the different chain types we have
+			 *	RSA, DSA, DH, EC etc...
+			 */
+			for (ret = SSL_CTX_set_current_cert(ctx, SSL_CERT_SET_FIRST);
+			     ret == 1;
+			     ret = SSL_CTX_set_current_cert(ctx, SSL_CERT_SET_NEXT)) chains_set++;
+
+			/*
+			 *	Check for discrepancies
+			 */
+
+			DEBUG3("Found %zu server certificate chain(s)", chains_set);
+
+			if (chains_set != chains_conf) {
+				WARN("Number of chains configured (%zu) does not match chains set (%zu)",
+				      chains_conf, chains_set);
+				if (chains_conf > chains_set) WARN("Only one chain per key type is allowed, "
+								   "check config for duplicates");
+			}
+
+			for (ret = SSL_CTX_set_current_cert(ctx, SSL_CERT_SET_FIRST);
+			     ret == 1;
+			     ret = SSL_CTX_set_current_cert(ctx, SSL_CERT_SET_NEXT)) {
+			     	STACK_OF(X509)	*our_chain;
+				X509		*our_cert;
+				int		i;
+
+				our_cert = SSL_CTX_get0_certificate(ctx);
+
+				/*
+				 *	The pkey type of the server certificate
+				 *	determines which pkey slot OpenSSL
+				 *	uses to store the chain.
+				 */
+				DEBUG3("%s chain", tls_utils_x509_pkey_type(our_cert));
+				if (!SSL_CTX_get0_chain_certs(ctx, &our_chain)) {
+					tls_log_error(NULL, "Failed retrieving chain certificates");
+					return NULL;
+				}
+
+				for (i = sk_X509_num(our_chain); i > 0 ; i--) {
+					_tls_ctx_print_cert_line(i, sk_X509_value(our_chain, i - 1));
+				}
+				_tls_ctx_print_cert_line(i, our_cert);
+			}
+			(void)SSL_CTX_set_current_cert(ctx, SSL_CERT_SET_FIRST);	/* Reset */
+		}
+#endif
+	}
+
+	/*
+	 *	Sets the list of CAs we send to the peer if we're
+	 *	requesting a certificate.
+	 *
+	 *	This does not change the trusted certificate authorities,
+	 *	those are set above with SSL_CTX_load_verify_locations.
+	 */
 	if (conf->ca_file && *conf->ca_file) SSL_CTX_set_client_CA_list(ctx, SSL_load_client_CA_file(conf->ca_file));
 
 #ifdef PSK_MAX_IDENTITY_LEN
@@ -464,16 +709,6 @@ post_ca:
 #endif
 #endif
 
-	/*
-	 *	OpenSSL will automatically create certificate chains,
-	 *	unless we tell it to not do that.  The problem is that
-	 *	it sometimes gets the chains right from a certificate
-	 *	signature view, but wrong from the clients view.
-	 */
-	if (!conf->auto_chain) {
-		SSL_CTX_set_mode(ctx, SSL_MODE_NO_AUTO_CHAIN);
-	}
-
 	/* Set Info callback */
 	SSL_CTX_set_info_callback(ctx, tls_session_info_cb);
 
@@ -538,6 +773,30 @@ post_ca:
 			tls_log_error(NULL, "Failed setting cipher list");
 			return NULL;
 		}
+	}
+
+	/*
+	 *	Print the actual cipher list
+	 */
+	if (DEBUG_ENABLED3) {
+		SSL		*ssl;
+		unsigned int	i = 0;
+		char const	*cipher;
+
+		ssl = SSL_new(ctx);
+		if (!ssl) {
+			tls_log_error(NULL, "Failed creating temporary SSL session");
+			return NULL;
+		}
+
+		DEBUG3("Configured ciphers (by priority)");
+
+		while ((cipher = SSL_get_cipher_list(ssl, i))) {
+			DEBUG3("[%i] %s", i, cipher);
+			i++;		/* Print index starting at zero */
+		}
+
+		SSL_free(ssl);
 	}
 
 	/*

@@ -1301,23 +1301,22 @@ int tls_session_handshake(REQUEST *request, tls_session_t *session)
 
 		char cipher_desc[256], cipher_desc_clean[256];
 		char *p = cipher_desc, *q = cipher_desc_clean;
-		bool space = false;
 
 		cipher = SSL_get_current_cipher(session->ssl);
 		SSL_CIPHER_description(cipher, cipher_desc, sizeof(cipher_desc));
 		/*
 		 *	Cleanup the output from OpenSSL
+		 *	Seems to print info in a tabular format.
 		 */
-		while (*p++ != '\0') {
-			if (*p == ' ') {
-				if (space) continue;
-				space = true;
-			} else {
-				space = false;
+		while (*p != '\0') {
+			if (isspace(*p)) {
+				*q++ = *p;
+				while (isspace(*++p));
+				continue;
 			}
-			*q++ = *p;
+			*q++ = *p++;
 		}
-		q[0] = '\0';
+		*q = '\0';
 
 		RDEBUG2("Cipher suite: %s", cipher_desc_clean);
 #if OPENSSL_VERSION_NUMBER >= 0x10001000L
@@ -1470,8 +1469,6 @@ tls_session_t *tls_session_init_client(TALLOC_CTX *ctx, fr_tls_conf_t *conf)
 
 	session->ctx = conf->ctx[(conf->ctx_count == 1) ? 0 : conf->ctx_next++ % conf->ctx_count];	/* mutex not needed */
 	rad_assert(session->ctx);
-
-	SSL_CTX_set_mode(session->ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_AUTO_RETRY);
 
 	session->ssl = SSL_new(session->ctx);
 	if (!session->ssl) {
@@ -1660,17 +1657,17 @@ tls_session_t *tls_session_init_server(TALLOC_CTX *ctx, fr_tls_conf_t *conf, REQ
 			return NULL;
 		}
 	/*
-	 *	Better to perform explicit checks, that rely
+	 *	Better to perform explicit checks, than rely
 	 *	on OpenSSL's opaque error messages.
 	 */
 	} else {
-		if (!conf->private_key_file) {
+		if (!conf->chains || !conf->chains[0]->private_key_file) {
 			ERROR("TLS Server requires a private key file");
 			talloc_free(session);
 			return NULL;
 		}
 
-		if (!conf->certificate_file) {
+		if (!conf->chains || !conf->chains[0]->certificate_file) {
 			ERROR("TLS Server requires a certificate file");
 			talloc_free(session);
 			return NULL;

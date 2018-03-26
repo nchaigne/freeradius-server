@@ -163,26 +163,125 @@ eap {
 	#  you want.
 	#
 	tls-config tls-common {
-		private_key_password = whatever
-		private_key_file = ${certdir}/server.pem
+		#
+		#  OpenSSL will automatically create certificate chains, unless
+		#  we tell it to not do that.  The problem is that it sometimes
+		#  gets the chains right from a certificate signature view, but
+		#  wrong from the clients view.
+		#
+		#  When setting "auto_chain = no", the server chain {} section(s)
+		#  below MUST include the full certificate chain.
+		#
+#		auto_chain = no
 
 		#
-		#  If Private key & Certificate are located in the same file,
-		#  then private_key_file & certificate_file must contain the
-		#  same file name.
+		#  A chain of certificates to present to the client.
 		#
-		#  If ca_file (below) is not used, then the certificate_file
-		#  below MUST include not only the server certificate, but ALSO
-		#  all of the CA certificates used to sign the server
-		#  certificate.
+		#  Multiple chain sections can be specified to allow different
+		#  chains for different key types (RSA, DSA, DH, EC).
 		#
-		#  Any certificate chain MUST be in order from server
-		#  certificate (first in the file) to intermediaries (second) to
-		#  root CA (last in the file) as per RFC 4346 (see
-		#  certificate_list
-		#  http://tools.ietf.org/html/rfc4346#section-7.4.2 )
+		#  If multiple chains for the same key type are specified
+		#  the last chain to be processed will be used for that
+		#  key type.
 		#
-		certificate_file = ${certdir}/server.pem
+		#  The key type does not need to be explicitly specified as
+		#  it is determined from the certificate provided.
+		#
+		#  Note: OpenSSL >= 1.0.2 is required for crypto agility to
+		#        function correctly.
+		#
+		chain {
+			#
+			#  The format of the certificate(s) and private key file.
+			#  May be one of PEM, DER or ASN1 (ASN1 is an alias for DER).
+			#
+#			format = "PEM"
+
+			#
+			#  If PEM is being used the "certificate_file" specified below
+			#  should contain the server certificates, and any intermediary CAs
+			#  which are not available to the client.
+			#
+			#  If verify_mode (below) is set to "hard" or "soft" all
+			#  intermediary CAs and the Root CA should be included.
+			#
+			#  Any certificate chain MUST be in order from server
+			#  certificate (first in the file) to intermediary CAs (second) to
+			#  Root CA (last in the file) as per RFC 4346 (see certificate_list)
+			#  http://tools.ietf.org/html/rfc4346#section-7.4.2 )
+			#
+			#  If DER is being used the "certificate_file" should contain ONLY
+			#  the server's certificate, and one or more "ca_file" items should be
+			#  used to load intermediary CAs and the Root CA.
+			#
+			certificate_file = ${certdir}/rsa/server.pem
+
+			#
+			#  Only available with OpenSSL >= 1.0.2
+			#
+			#  Load an additional intermediary CA or Root CA for consideration in
+			#  chain compilation.  Multiple "ca_file" config items may be used
+			#  to load multiple certificates.
+			#
+			ca_file = ${certdir}/rsa/ca.pem
+
+			#
+			#  Password used to encrypt the private key.  If the private key is
+			#  not encrypted, this config item will have no effect.
+			#
+			private_key_password = whatever
+
+			#
+			#  If the Private key & Certificate are located in the same file,
+			#  then 'private_key_file' & 'certificate_file' must contain the
+			#  same file name.
+			#
+			private_key_file = ${certdir}/rsa/server.key
+
+			#
+			#  With OpenSSL >= 1.0.2 we attempt to precompile the certificate chain
+			#  from server certificate to Root CA.  This configuration item specifies
+			#  what happens if compilation fails.
+			#
+			#    hard - Error out if we cannot build a complete certificate chain.
+			#    soft - Warn if we cannot build a complete certificate chain.
+			#    none - Stay silent if we cannot build a complete certificate chain.
+			#
+			#  The default is "hard".  The only time this should be changed is if
+			#  you want to limit the number of intermediary CAs sent to the
+			#  client by not including them in the chain.
+			#
+			#  Note: Depending on the value of "auto_chain" we may still be able to
+			#  build a complete chain, but this will be done at runtime.
+			#
+			#  Note: "auto_chain" has no effect on which certificates are considered
+			#  for pre-compilation.  Only those listed in this chain {} section will be
+			#  used.
+			#
+#			verify_mode = "hard"
+
+			#
+			#  Only available with OpenSSL >= 1.0.2
+			#
+			#  Omit the Root CA from the compiled certificate chain.
+			#  The Root CA should already be known/trusted by the client so it is
+			#  usually not needed unless the client is particularly poorly behaved.
+			#
+			#  Note: The Root CA must still be available for chain compilation to
+			#  succeed even if "include_root_ca = no".
+			#
+#			include_root_ca = no
+		}
+
+		#
+		#  Load the ECC certificate chain for key agility
+		#
+		chain {
+			certificate_file = ${certdir}/ecc/server.pem
+			ca_file = ${certdir}/ecc/ca.pem
+			private_key_password = whatever
+			private_key_file = ${certdir}/ecc/server.key
+		}
 
 		#
 		#  Server certificate may also be specified at runtime on a per
@@ -216,18 +315,7 @@ eap {
 		#  set to a certificate chain for your institution's CA
 		#  or a self signed Root CA.
 		#
-		ca_file = ${cadir}/ca.pem
-
-		#
-	 	#  OpenSSL will automatically create certificate chains, unless
-	 	#  we tell it to not do that.  The problem is that it sometimes
-	 	#  gets the chains right from a certificate signature view, but
-	 	#  wrong from the clients view.
-	 	#
-		#  When setting "auto_chain = no", the server certificate file
-		#  MUST include the full certificate chain.
-		#
-#		auto_chain = yes
+		ca_file = ${cadir}/rsa/ca.pem
 
 		#
 		#  If OpenSSL supports TLS-PSK, then we can use a PSK identity

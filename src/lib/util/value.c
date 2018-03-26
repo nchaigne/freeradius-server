@@ -2874,8 +2874,8 @@ int fr_value_box_strsteal(TALLOC_CTX *ctx, fr_value_box_t *dst, fr_dict_attr_t c
 	char	*str;
 
 	len = talloc_array_length(src);
-	if ((len == 1) || (src[len - 1] != '\0')) {
-		fr_strerror_printf("Input buffer not \\0 terminated");
+	if ((len == 0) || (src[len - 1] != '\0')) {
+		fr_strerror_printf("Input buffer empty or not \\0 terminated");
 		return -1;
 	}
 
@@ -3887,14 +3887,15 @@ char *fr_value_box_asprint(TALLOC_CTX *ctx, fr_value_box_t const *data, char quo
 
 	case FR_TYPE_DATE:
 	{
+		char buff[64];
 		time_t t;
 		struct tm s_tm;
 
 		t = data->vb_date;
-
-		p = talloc_array(ctx, char, 64);
-		strftime(p, 64, "%b %e %Y %H:%M:%S %Z",
+		strftime(buff, 64, "%b %e %Y %H:%M:%S %Z",
 			 localtime_r(&t, &s_tm));
+
+		p = talloc_typed_strdup(ctx, buff);
 		break;
 	}
 

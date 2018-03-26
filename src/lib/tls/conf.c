@@ -39,6 +39,31 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <freeradius-devel/modules.h>
 #include <freeradius-devel/rad_assert.h>
 
+/** Certificate formats
+ *
+ */
+static const FR_NAME_NUMBER certificate_format_table[] = {
+	{ "PEM",	SSL_FILETYPE_PEM	},
+	{ "ASN1",	SSL_FILETYPE_ASN1	},
+	{ "DER",	SSL_FILETYPE_ASN1	},	/* Alternate name for ASN1 */
+
+	{ NULL,		0			},
+};
+
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+static const FR_NAME_NUMBER chain_verify_mode_table[] = {
+	{ "hard",	FR_TLS_CHAIN_VERIFY_HARD },
+	{ "soft",	FR_TLS_CHAIN_VERIFY_SOFT },
+	{ "none",	FR_TLS_CHAIN_VERIFY_NONE },
+	{ NULL,		0			 },
+};
+#endif
+
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+static int chain_verify_mode_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule);
+#endif
+static int certificate_format_type_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule);
+
 static CONF_PARSER cache_config[] = {
 	{ FR_CONF_OFFSET("virtual_server", FR_TYPE_STRING, fr_tls_conf_t, session_cache_server) },
 	{ FR_CONF_OFFSET("name", FR_TYPE_TMPL, fr_tls_conf_t, session_id_name),
@@ -80,14 +105,36 @@ static CONF_PARSER ocsp_config[] = {
 };
 #endif
 
+CONF_PARSER tls_chain_config[] = {
+	{ FR_CONF_OFFSET("format", FR_TYPE_VOID, fr_tls_chain_conf_t, file_format), .dflt = "pem", .func = certificate_format_type_parse },
+	{ FR_CONF_OFFSET("certificate_file", FR_TYPE_FILE_INPUT | FR_TYPE_REQUIRED , fr_tls_chain_conf_t, certificate_file) },
+	{ FR_CONF_OFFSET("private_key_password", FR_TYPE_STRING | FR_TYPE_SECRET, fr_tls_chain_conf_t, password) },
+	{ FR_CONF_OFFSET("private_key_file", FR_TYPE_FILE_INPUT | FR_TYPE_REQUIRED, fr_tls_chain_conf_t, private_key_file) },
+
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+	{ FR_CONF_OFFSET("ca_file", FR_TYPE_FILE_INPUT | FR_TYPE_MULTI, fr_tls_chain_conf_t, ca_files) },
+
+	{ FR_CONF_OFFSET("verify_mode", FR_TYPE_VOID, fr_tls_chain_conf_t, verify_mode), .dflt = "hard", .func = chain_verify_mode_parse },
+	{ FR_CONF_OFFSET("include_root_ca", FR_TYPE_BOOL, fr_tls_chain_conf_t, include_root_ca), .dflt = "no" },
+#endif
+	CONF_PARSER_TERMINATOR
+};
+
 CONF_PARSER tls_server_config[] = {
+	{ FR_CONF_OFFSET("auto_chain", FR_TYPE_BOOL, fr_tls_conf_t, auto_chain), .dflt = "yes" },
+
+	{ FR_CONF_OFFSET("chain", FR_TYPE_SUBSECTION | FR_TYPE_MULTI, fr_tls_conf_t, chains),
+	  .subcs_size = sizeof(fr_tls_chain_conf_t), .subcs_type = "fr_tls_chain_conf_t",
+	  .subcs = tls_chain_config },
+
+	{ FR_CONF_DEPRECATED("pem_file_type", FR_TYPE_BOOL, fr_tls_conf_t, NULL) },
+	{ FR_CONF_DEPRECATED("certificate_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, NULL) },
+	{ FR_CONF_DEPRECATED("private_key_password", FR_TYPE_STRING | FR_TYPE_SECRET, fr_tls_conf_t, NULL) },
+	{ FR_CONF_DEPRECATED("private_key_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, NULL) },
+
 	{ FR_CONF_OFFSET("verify_depth", FR_TYPE_UINT32, fr_tls_conf_t, verify_depth), .dflt = "0" },
 	{ FR_CONF_OFFSET("ca_path", FR_TYPE_FILE_INPUT, fr_tls_conf_t, ca_path) },
-	{ FR_CONF_OFFSET("pem_file_type", FR_TYPE_BOOL, fr_tls_conf_t, file_type), .dflt = "yes" },
-	{ FR_CONF_OFFSET("private_key_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, private_key_file) },
-	{ FR_CONF_OFFSET("certificate_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, certificate_file) },
 	{ FR_CONF_OFFSET("ca_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, ca_file) },
-	{ FR_CONF_OFFSET("private_key_password", FR_TYPE_STRING | FR_TYPE_SECRET, fr_tls_conf_t, private_key_password) },
 #ifdef PSK_MAX_IDENTITY_LEN
 	{ FR_CONF_OFFSET("psk_identity", FR_TYPE_STRING, fr_tls_conf_t, psk_identity) },
 	{ FR_CONF_OFFSET("psk_hexphrase", FR_TYPE_STRING | FR_TYPE_SECRET, fr_tls_conf_t, psk_password) },
@@ -96,7 +143,7 @@ CONF_PARSER tls_server_config[] = {
 	{ FR_CONF_OFFSET("dh_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, dh_file) },
 	{ FR_CONF_OFFSET("random_file", FR_TYPE_FILE_EXISTS, fr_tls_conf_t, random_file) },
 	{ FR_CONF_OFFSET("fragment_size", FR_TYPE_UINT32, fr_tls_conf_t, fragment_size), .dflt = "1024" },
-	{ FR_CONF_OFFSET("auto_chain", FR_TYPE_BOOL, fr_tls_conf_t, auto_chain), .dflt = "yes" },
+
 	{ FR_CONF_OFFSET("disable_single_dh_use", FR_TYPE_BOOL, fr_tls_conf_t, disable_single_dh_use) },
 	{ FR_CONF_OFFSET("check_crl", FR_TYPE_BOOL, fr_tls_conf_t, check_crl), .dflt = "no" },
 #ifdef X509_V_FLAG_CRL_CHECK_ALL
@@ -117,7 +164,6 @@ CONF_PARSER tls_server_config[] = {
 	{ FR_CONF_OFFSET("ecdh_curve", FR_TYPE_STRING, fr_tls_conf_t, ecdh_curve), .dflt = "prime256v1" },
 #endif
 #endif
-
 	{ FR_CONF_OFFSET("tls_max_version", FR_TYPE_FLOAT32, fr_tls_conf_t, tls_max_version) },
 
 	{ FR_CONF_OFFSET("tls_min_version", FR_TYPE_FLOAT32, fr_tls_conf_t, tls_min_version), .dflt = "1.0" },
@@ -135,13 +181,19 @@ CONF_PARSER tls_server_config[] = {
 };
 
 CONF_PARSER tls_client_config[] = {
+	{ FR_CONF_OFFSET("chain", FR_TYPE_SUBSECTION | FR_TYPE_MULTI, fr_tls_conf_t, chains),
+	  .subcs_size = sizeof(fr_tls_chain_conf_t), .subcs_type = "fr_tls_chain_conf_t",
+	  .subcs = tls_chain_config },
+
+	{ FR_CONF_DEPRECATED("pem_file_type", FR_TYPE_BOOL, fr_tls_conf_t, NULL) },
+	{ FR_CONF_DEPRECATED("certificate_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, NULL) },
+	{ FR_CONF_DEPRECATED("private_key_password", FR_TYPE_STRING | FR_TYPE_SECRET, fr_tls_conf_t, NULL) },
+	{ FR_CONF_DEPRECATED("private_key_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, NULL) },
+
 	{ FR_CONF_OFFSET("verify_depth", FR_TYPE_UINT32, fr_tls_conf_t, verify_depth), .dflt = "0" },
 	{ FR_CONF_OFFSET("ca_path", FR_TYPE_FILE_INPUT, fr_tls_conf_t, ca_path) },
-	{ FR_CONF_OFFSET("pem_file_type", FR_TYPE_BOOL, fr_tls_conf_t, file_type), .dflt = "yes" },
-	{ FR_CONF_OFFSET("private_key_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, private_key_file) },
-	{ FR_CONF_OFFSET("certificate_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, certificate_file) },
+
 	{ FR_CONF_OFFSET("ca_file", FR_TYPE_FILE_INPUT, fr_tls_conf_t, ca_file) },
-	{ FR_CONF_OFFSET("private_key_password", FR_TYPE_STRING | FR_TYPE_SECRET, fr_tls_conf_t, private_key_password) },
 	{ FR_CONF_OFFSET("dh_file", FR_TYPE_STRING, fr_tls_conf_t, dh_file) },
 	{ FR_CONF_OFFSET("random_file", FR_TYPE_STRING, fr_tls_conf_t, random_file) },
 	{ FR_CONF_OFFSET("fragment_size", FR_TYPE_UINT32, fr_tls_conf_t, fragment_size), .dflt = "1024" },
@@ -163,43 +215,106 @@ CONF_PARSER tls_client_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+/** Calls to convert verify_mode strings into macros
+ *
+ * @param[in] ctx	to allocate data in.
+ * @param[out] out	the verify_mode macro representing the mode.
+ * @param[in] ci	#CONF_PAIR specifying the name of the mode.
+ * @param[in] rule	unused.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
+ */
+static int chain_verify_mode_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule)
+{
+	fr_tls_chain_verify_mode_t	type;
+	char const			*type_str;
+
+	type_str = cf_pair_value(cf_item_to_pair(ci));
+	type = fr_str2int(chain_verify_mode_table, type_str, 0);
+	if (type == 0) {
+		cf_log_err(ci, "Invalid mode \"%s\", expected 'hard', 'soft' or 'none'", type_str);
+		return -1;
+	}
+
+	*((int *)out) = type;
+
+	return 0;
+}
+#endif
+
+/** Calls to convert format strings to OpenSSL macros
+ *
+ * @param[in] ctx	to allocate data in.
+ * @param[out] out	the OpenSSL macro representing the format.
+ * @param[in] ci	#CONF_PAIR specifying the name of the format.
+ * @param[in] rule	unused.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
+ */
+static int certificate_format_type_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule)
+{
+	int		type;
+	char const	*type_str;
+
+	type_str = cf_pair_value(cf_item_to_pair(ci));
+	type = fr_str2int(certificate_format_table, type_str, -1);
+	if (type == -1) {
+		cf_log_err(ci, "Invalid format \"%s\", expected either 'PEM' or 'ASN1'", type_str);
+		return -1;
+	}
+
+	*((int *)out) = type;
+
+	return 0;
+}
+
 #ifdef __APPLE__
+/*
+ *	We don't want to put the private key password in eap.conf, so check
+ *	for our special string which indicates we should get the password
+ *	programmatically.
+ */
+static char const *special_string = "Apple:UsecertAdmin";
+
 /** Use cert_admin to retrieve the password for the private key
  *
  */
 static int conf_cert_admin_password(fr_tls_conf_t *conf)
 {
-	if (!conf->private_key_password) return 0;
+	size_t i, cnt;
 
-	/*
-	 *	We don't want to put the private key password in eap.conf, so check
-	 *	for our special string which indicates we should get the password
-	 *	programmatically.
-	 */
-	char const *special_string = "Apple:UsecertAdmin";
-	if (strncmp(conf->private_key_password, special_string, strlen(special_string)) == 0) {
-		char cmd[256];
-		char *password;
-		long const max_password_len = 128;
-		FILE *cmd_pipe;
+	if (!conf->chains) return 0;
+
+	cnt = talloc_array_length(conf->chains);
+	for (i = 0; i < cnt; i++) {
+		char		cmd[256];
+		char		*password;
+		long const	max_password_len = 128;
+		FILE		*cmd_pipe;
+
+		if (!conf->chains[i]->password) continue;
+
+		if (strncmp(conf->chains[i]->password, special_string, strlen(special_string)) != 0) continue;
 
 		snprintf(cmd, sizeof(cmd) - 1, "/usr/sbin/certadmin --get-private-key-passphrase \"%s\"",
-			 conf->private_key_file);
+			 conf->chains[i]->private_key_file);
 
 		DEBUG2("Getting private key passphrase using command \"%s\"", cmd);
 
 		cmd_pipe = popen(cmd, "r");
 		if (!cmd_pipe) {
 			ERROR("%s command failed: Unable to get private_key_password", cmd);
-			ERROR("Error reading private_key_file %s", conf->private_key_file);
+			ERROR("Error reading private_key_file %s", conf->chains[i]->private_key_file);
 			return -1;
 		}
 
-		talloc_const_free(conf->private_key_password);
 		password = talloc_array(conf, char, max_password_len);
 		if (!password) {
 			ERROR("Can't allocate space for private_key_password");
-			ERROR("Error reading private_key_file %s", conf->private_key_file);
+			ERROR("Error reading private_key_file %s", conf->chains[i]->private_key_file);
 			pclose(cmd_pipe);
 			return -1;
 		}
@@ -211,7 +326,8 @@ static int conf_cert_admin_password(fr_tls_conf_t *conf)
 		password[strlen(password) - 1] = '\0';
 
 		DEBUG3("Password from command = \"%s\"", password);
-		conf->private_key_password = password;
+		talloc_const_free(conf->chains[i]->password);
+		conf->chains[i]->password = password;
 	}
 
 	return 0;
@@ -328,7 +444,7 @@ fr_tls_conf_t *tls_conf_parse_server(CONF_SECTION *cs)
 	/*
 	 *	Initialize TLS
 	 */
-	conf->ctx = talloc_array(conf, SSL_CTX *, conf->ctx_count);
+	conf->ctx = talloc_zero_array(conf, SSL_CTX *, conf->ctx_count);
 	for (i = 0; i < conf->ctx_count; i++) {
 		conf->ctx[i] = tls_ctx_alloc(conf, false);
 		if (conf->ctx[i] == NULL) goto error;

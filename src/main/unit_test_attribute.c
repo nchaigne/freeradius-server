@@ -565,19 +565,23 @@ static void parse_condition(char const *input, char *output, size_t outlen)
 
 static void parse_xlat(char const *input, char *output, size_t outlen)
 {
-	ssize_t dec_len;
-	char const *error = NULL;
-	char *fmt = talloc_typed_strdup(NULL, input);
-	xlat_exp_t *head;
+	ssize_t		dec_len;
+	char const	*error = NULL;
+	char		*fmt;
+	xlat_exp_t	*head;
 
+	fmt = talloc_typed_strdup(NULL, input);
 	dec_len = xlat_tokenize(fmt, fmt, &head, &error);
+
 	if (dec_len <= 0) {
 		snprintf(output, outlen, "ERROR offset %d '%s'", (int) -dec_len, error);
+		talloc_free(fmt);
 		return;
 	}
 
 	if (input[dec_len] != '\0') {
 		snprintf(output, outlen, "ERROR offset %d 'Too much text'", (int) dec_len);
+		talloc_free(fmt);
 		return;
 	}
 
@@ -758,8 +762,9 @@ static void process_file(CONF_SECTION *features, fr_dict_t *dict, const char *ro
 
 			cp = cf_pair_find(features, p);
 			if (!cp || (strcmp(cf_pair_value(cp), "yes") != 0)) {
-				fprintf(stdout, "Skipping, missing feature \"%s\"", p);
+				fprintf(stdout, "Skipping, missing feature \"%s\"\n", p);
 				if (fp != stdin) fclose(fp);
+				talloc_free(tp_ctx);
 				return; /* Skip this file */
 			}
 			continue;

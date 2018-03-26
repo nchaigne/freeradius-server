@@ -213,6 +213,42 @@ typedef struct {
 } fr_tls_ocsp_conf_t;
 #endif
 
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+/** Different chain building modes
+ *
+ */
+typedef enum {
+	FR_TLS_CHAIN_VERIFY_INVALID = 0,
+
+	FR_TLS_CHAIN_VERIFY_HARD,			//!< Fail if we can't build a complete chain from
+							///< the leaf cert back to a root.
+	FR_TLS_CHAIN_VERIFY_SOFT,			//!< Warn if we can't build a complete chain from
+							///< the leaf cert back to a root.
+	FR_TLS_CHAIN_VERIFY_NONE			//!< Don't verify/build the chain.
+} fr_tls_chain_verify_mode_t;
+#endif
+
+/** Structure representing a certificate chain configuration
+ *
+ */
+typedef struct {
+	int		file_format;			//!< Whether the file is expected to be PEM encoded.
+							///< This allows us to load multiple chained PEM certificates
+							///< from a single file.
+
+	char const	*certificate_file;		//!< Path to certificate.
+
+	char const	*password;			//!< Password to decrypt the certificate(s).
+	char const	*private_key_file;		//!< Path to certificate.
+
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+	char const	**ca_files;			//!< Extra certificates to load.
+	fr_tls_chain_verify_mode_t	verify_mode;	//!< How hard we try to build up a complete certificate
+							///< chain.
+#endif
+	bool		include_root_ca;		//!< Include the root ca in the chain we built.
+} fr_tls_chain_conf_t;
+
 /* configured values goes right here */
 struct fr_tls_conf_t {
 	SSL_CTX		**ctx;				//!< We use an array of contexts to reduce contention.
@@ -223,9 +259,8 @@ struct fr_tls_conf_t {
 
 	CONF_SECTION	*cs;
 
-	char const	*private_key_password;		//!< Password to decrypt the private key.
-	char const	*private_key_file;		//!< Private key file.
-	char const	*certificate_file;		//!< Public (certificate) file.
+	fr_tls_chain_conf_t	**chains;		//!< One or more certificates
+
 	char const	*random_file;			//!< If set, we read 10K of data (or the complete file)
 							//!< and use it to seed OpenSSL's PRNG.
 	char const	*ca_path;
@@ -236,7 +271,6 @@ struct fr_tls_conf_t {
 	uint32_t	verify_depth;			//!< Maximum number of certificates we can traverse
 							//!< when attempting to reach the presented certificate
 							//!< from our Root CA.
-	bool		file_type;
 	bool		auto_chain;			//!< Allow OpenSSL to build certificate chains
 							//!< from all certificates it has available.
 							//!< If false, the complete chain must be provided in
@@ -505,6 +539,8 @@ int		tls_validate_client_cert_chain(SSL *ssl);
 /*
  *	tls/utils.c
  */
+char const	*tls_utils_x509_pkey_type(X509 *cert);
+
 int		tls_utils_keyblock_size_get(REQUEST *request, SSL *ssl);
 
 int		tls_utils_asn1time_to_epoch(time_t *out, ASN1_TIME const *asn1);
