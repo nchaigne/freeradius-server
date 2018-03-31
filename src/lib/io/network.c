@@ -60,7 +60,7 @@ typedef struct fr_network_inject_t {
 } fr_network_inject_t;
 
 typedef struct fr_network_worker_t {
-	int			heap_id;		//!< workers are in a heap
+	int32_t			heap_id;		//!< workers are in a heap
 	fr_time_t		cpu_time;		//!< how much CPU time this worker has spent
 	fr_time_t		predicted;		//!< predicted processing time for one packet
 
@@ -699,7 +699,7 @@ static void fr_network_socket_callback(void *ctx, void const *data, size_t data_
 	rad_assert(s != NULL);
 	memcpy(&s->listen, data, sizeof(s->listen));
 
-	MEM(s->waiting = fr_heap_create(waiting_cmp, offsetof(fr_channel_data_t, channel.heap_id)));
+	MEM(s->waiting = fr_heap_create(waiting_cmp, fr_channel_data_t, channel.heap_id));
 	FR_DLIST_INIT(s->entry);
 
 	talloc_set_destructor(s, _network_socket_free);
@@ -773,7 +773,7 @@ static void fr_network_directory_callback(void *ctx, void const *data, size_t da
 	rad_assert(s != NULL);
 	memcpy(&s->listen, data, sizeof(s->listen));
 
-	MEM(s->waiting = fr_heap_create(waiting_cmp, offsetof(fr_channel_data_t, channel.heap_id)));
+	MEM(s->waiting = fr_heap_create(waiting_cmp, fr_channel_data_t, channel.heap_id));
 	FR_DLIST_INIT(s->entry);
 
 	talloc_set_destructor(s, _network_socket_free);
@@ -1011,13 +1011,13 @@ fr_network_t *fr_network_create(TALLOC_CTX *ctx, fr_event_list_t *el, fr_log_t c
 	/*
 	 *	Create the various heaps.
 	 */
-	nr->sockets = rbtree_create(nr, socket_cmp, NULL, RBTREE_FLAG_NONE);
+	nr->sockets = rbtree_talloc_create(nr, socket_cmp, fr_network_socket_t, NULL, RBTREE_FLAG_NONE);
 	if (!nr->sockets) {
 		fr_strerror_printf_push("Failed creating tree for sockets");
 		goto fail2;
 	}
 
-	nr->replies = fr_heap_create(reply_cmp, offsetof(fr_channel_data_t, channel.heap_id));
+	nr->replies = fr_heap_create(reply_cmp, fr_channel_data_t, channel.heap_id);
 	if (!nr->replies) {
 		fr_strerror_printf_push("Failed creating heap for replies");
 		goto fail2;

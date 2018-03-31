@@ -35,7 +35,7 @@ typedef struct rlm_cache_rbtree {
 
 typedef struct rlm_cache_rbtree_entry {
 	rlm_cache_entry_t	fields;		//!< Entry data.
-	size_t			offset;		//!< Offset used for heap.
+	int32_t			heap_id;	//!< Offset used for heap.
 } rlm_cache_rbtree_entry_t;
 
 /** Compare two entries by key
@@ -108,7 +108,7 @@ static int mod_instantiate(UNUSED rlm_cache_config_t const *config, void *instan
 	/*
 	 *	The cache.
 	 */
-	driver->cache = rbtree_create(NULL, cache_entry_cmp, NULL, 0);
+	driver->cache = rbtree_talloc_create(NULL, cache_entry_cmp, rlm_cache_rbtree_entry_t, NULL, 0);
 	if (!driver->cache) {
 		ERROR("Failed to create cache");
 		return -1;
@@ -118,7 +118,7 @@ static int mod_instantiate(UNUSED rlm_cache_config_t const *config, void *instan
 	/*
 	 *	The heap of entries to expire.
 	 */
-	driver->heap = fr_heap_create(cache_heap_cmp, offsetof(rlm_cache_rbtree_entry_t, offset));
+	driver->heap = fr_heap_talloc_create(cache_heap_cmp, rlm_cache_rbtree_entry_t, heap_id);
 	if (!driver->heap) {
 		ERROR("Failed to create heap for the cache");
 		return -1;
@@ -255,7 +255,7 @@ static cache_status_t cache_entry_insert(rlm_cache_config_t const *config, void 
 		}
 	}
 
-	if (!fr_heap_insert(driver->heap, my_c)) {
+	if (fr_heap_insert(driver->heap, my_c) < 0) {
 		rbtree_deletebydata(driver->cache, my_c);
 		RERROR("Failed adding entry to expiry heap");
 
@@ -276,20 +276,17 @@ static cache_status_t cache_entry_set_ttl(UNUSED rlm_cache_config_t const *confi
 					  rlm_cache_entry_t *c)
 {
 	rlm_cache_rbtree_t *driver = talloc_get_type_abort(instance, rlm_cache_rbtree_t);
-	int ret;
 
 #ifdef NDEBUG
 	if (!request) return CACHE_ERROR;
 #endif
 
-	ret = fr_heap_extract(driver->heap, c);
-	rad_assert(ret == 1);
-	if (ret != 1) {					/* Need this check if we're not building with asserts */
+	if (!fr_cond_assert(fr_heap_extract(driver->heap, c) == 0)) {
 		RERROR("Entry not in heap");
 		return CACHE_ERROR;
 	}
 
-	if (!fr_heap_insert(driver->heap, c)) {
+	if (fr_heap_insert(driver->heap, c) < 0) {
 		rbtree_deletebydata(driver->cache, c);	/* make sure we don't leak entries... */
 		RERROR("Failed updating entry TTL.  Entry was forcefully expired");
 		return CACHE_ERROR;

@@ -2137,7 +2137,9 @@ static void NEVER_RETURNS usage(int status)
 	fprintf(output, "                        - noreq    - could be matched with the response.\n");
 	fprintf(output, "                        - reused   - ID too soon.\n");
 	fprintf(output, "                        - error    - decoding the packet.\n");
-	fprintf(output, "  -f <filter>           PCAP filter (default is 'udp port <port> or <port + 1> or %i')\n", FR_COA_UDP_PORT);
+	fprintf(output, "  -f <filter>           PCAP filter (default is 'udp port <port> or <port + 1> or %i'\n",
+		FR_COA_UDP_PORT);
+	fprintf(output, "                                     with extra rules to allow .1Q tagged packets)\n");
 	fprintf(output, "  -h                    This help message.\n");
 	fprintf(output, "  -i <interface>        Capture packets from interface (defaults to all if supported).\n");
 	fprintf(output, "  -I <file>             Read packets from <file>\n");
@@ -2176,8 +2178,6 @@ int main(int argc, char *argv[])
 
 	char errbuf[PCAP_ERRBUF_SIZE];			/* Error buffer */
 	int port = FR_AUTH_UDP_PORT;
-
-	char buffer[1024];
 
 	int opt;
 	char const *radius_dir = RADDBDIR;
@@ -2521,9 +2521,15 @@ int main(int argc, char *argv[])
 #endif
 
 	if (!conf->pcap_filter) {
-		snprintf(buffer, sizeof(buffer), "udp port %d or %d or %d",
-			 port, port + 1, FR_COA_UDP_PORT);
-		conf->pcap_filter = buffer;
+		conf->pcap_filter = talloc_asprintf(conf, "udp port %d or %d or %d", port, port + 1, FR_COA_UDP_PORT);
+
+		/*
+		 *	Using the VLAN keyword strips off the .1q tag
+		 *	allowing the UDP filter to work.  Without this
+		 *	tagged packets aren't processed.
+		 */
+		conf->pcap_filter_vlan = talloc_asprintf(conf, "(vlan and (%s)) or (%s)",
+							 conf->pcap_filter, conf->pcap_filter);
 	}
 
 	if (fr_dict_from_file(conf, &dict, dict_dir, FR_DICTIONARY_FILE, "radius") < 0) {
@@ -2556,7 +2562,7 @@ int main(int argc, char *argv[])
 			usage(64);
 		}
 
-		link_tree = rbtree_create(conf, (rbcmp) rs_rtx_cmp, _unmark_link, 0);
+		link_tree = rbtree_talloc_create(conf, (rbcmp) rs_rtx_cmp, rs_request_t, _unmark_link, 0);
 		if (!link_tree) {
 			ERROR("Failed creating RTX tree");
 			goto finish;
@@ -2620,7 +2626,7 @@ int main(int argc, char *argv[])
 	/*
 	 *	Setup the request tree
 	 */
-	request_tree = rbtree_create(conf, (rbcmp) rs_packet_cmp, _unmark_request, 0);
+	request_tree = rbtree_talloc_create(conf, (rbcmp) rs_packet_cmp, rs_request_t, _unmark_request, 0);
 	if (!request_tree) {
 		ERROR("Failed creating request tree");
 		goto finish;
@@ -2649,7 +2655,7 @@ int main(int argc, char *argv[])
 		     dev_p = dev_p->next) {
 			int link_layer;
 
-			/* Don't use the any devices, it's horribly broken */
+			/* Don't use the any device, it's horribly broken */
 			if (!strcmp(dev_p->name, "any")) continue;
 
 			link_layer = fr_pcap_if_link_layer(errbuf, dev_p);
@@ -2765,8 +2771,15 @@ int main(int argc, char *argv[])
 			}
 
 			if (conf->pcap_filter) {
-				if (fr_pcap_apply_filter(in_p, conf->pcap_filter) < 0) {
-					ERROR("Failed applying filter");
+				/*
+				 *	Not all link layers support VLAN tags
+				 *	and this is the easiest way to discover
+				 *	which do and which don't.
+				 */
+				if ((!conf->pcap_filter_vlan ||
+				     (fr_pcap_apply_filter(in_p, conf->pcap_filter_vlan) < 0)) &&
+				     (fr_pcap_apply_filter(in_p, conf->pcap_filter) < 0)) {
+					ERROR("Failed applying filter: %s", fr_strerror());
 					goto finish;
 				}
 			}

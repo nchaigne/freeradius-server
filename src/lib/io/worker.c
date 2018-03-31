@@ -163,7 +163,7 @@ static void fr_worker_post_event(fr_event_list_t *el, struct timeval *now, void 
  */
 #define WORKER_HEAP_INIT(_name, _func, _type, _member) do { \
 		FR_DLIST_INIT(worker->_name.list); \
-		worker->_name.heap = fr_heap_create(_func, offsetof(_type, _member)); \
+		worker->_name.heap = fr_heap_create(_func, _type, _member); \
 		if (!worker->_name.heap) { \
 			(void) fr_event_user_delete(worker->el, fr_worker_evfilt_user, worker); \
 			talloc_free(worker); \
@@ -1089,7 +1089,7 @@ static int fr_worker_pre_event(void *ctx, struct timeval *wake)
 		return 0;
 	}
 
-	DEBUG3("\t%ssleeping running %zd, localized %zd, to_decode %zd",
+	DEBUG3("\t%ssleeping running %u, localized %u, to_decode %u",
 	       worker->name,
 	       fr_heap_num_elements(worker->runnable),
 	       fr_heap_num_elements(worker->localized.heap),
@@ -1336,19 +1336,19 @@ nomem:
 	WORKER_HEAP_INIT(to_decode, worker_message_cmp, fr_channel_data_t, channel.heap_id);
 	WORKER_HEAP_INIT(localized, worker_message_cmp, fr_channel_data_t, channel.heap_id);
 
-	worker->runnable = fr_heap_create(worker_runnable_cmp, offsetof(REQUEST, runnable_id));
+	worker->runnable = fr_heap_talloc_create(worker_runnable_cmp, REQUEST, runnable_id);
 	if (!worker->runnable) {
 		fr_strerror_printf("Failed creating runnable heap");
 		goto fail;
 	}
 
-	worker->time_order = fr_heap_create(worker_time_order_cmp, offsetof(REQUEST, time_order_id));
+	worker->time_order = fr_heap_talloc_create(worker_time_order_cmp, REQUEST, time_order_id);
 	if (!worker->time_order) {
 		fr_strerror_printf("Failed creating time_order heap");
 		goto fail;
 	}
 
-	worker->dedup = rbtree_create(worker, worker_dedup_cmp, NULL, RBTREE_FLAG_NONE);
+	worker->dedup = rbtree_talloc_create(worker, worker_dedup_cmp, REQUEST, NULL, RBTREE_FLAG_NONE);
 	if (!worker->dedup) {
 		fr_strerror_printf("Failed creating de_dup tree");
 		goto fail;

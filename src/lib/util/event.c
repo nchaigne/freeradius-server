@@ -78,7 +78,7 @@ struct fr_event_timer {
 	TALLOC_CTX		*linked_ctx;		//!< talloc ctx this event was bound to.
 
 	fr_event_timer_t const	**parent;		//!< Previous timer.
-	int			heap;			//!< Where to store opaque heap data.
+	int32_t			heap_id;	       	//!< Where to store opaque heap data.
 };
 
 typedef enum {
@@ -990,7 +990,7 @@ static int _event_timer_free(fr_event_timer_t *ev)
 	/*
 	 *	Events MUST be in the heap
 	 */
-	if (!fr_cond_assert(ret == 1)) {
+	if (!fr_cond_assert(ret == 0)) {
 		fr_strerror_printf("Event not found in heap");
 		return -1;
 	}
@@ -1095,8 +1095,7 @@ int fr_event_timer_insert(TALLOC_CTX *ctx, fr_event_list_t *el, fr_event_timer_t
 	ev->linked_ctx = ctx;
 	ev->parent = ev_p;
 
-	if (unlikely(!fr_heap_insert(el->times, ev))) {
-		fr_strerror_printf("Failed inserting event into heap");
+	if (unlikely(fr_heap_insert(el->times, ev) < 0)) {
 		talloc_free(ev);
 		return -1;
 	}
@@ -1818,7 +1817,7 @@ fr_event_list_t *fr_event_list_alloc(TALLOC_CTX *ctx, fr_event_status_cb_t statu
 	el->kq = -1;	/* So destructor can be used before kqueue() provides us with fd */
 	talloc_set_destructor(el, _event_list_free);
 
-	el->times = fr_heap_create(fr_event_timer_cmp, offsetof(fr_event_timer_t, heap));
+	el->times = fr_heap_talloc_create(fr_event_timer_cmp, fr_event_timer_t, heap_id);
 	if (!el->times) {
 		fr_strerror_printf("Failed allocating event heap");
 	error:
@@ -1826,7 +1825,7 @@ fr_event_list_t *fr_event_list_alloc(TALLOC_CTX *ctx, fr_event_status_cb_t statu
 		return NULL;
 	}
 
-	el->fds = rbtree_create(el, fr_event_fd_cmp, NULL, 0);
+	el->fds = rbtree_talloc_create(el, fr_event_fd_cmp, fr_event_fd_t, NULL, 0);
 	if (!el->fds) {
 		fr_strerror_printf("Failed allocating FD tree");
 		goto error;

@@ -163,6 +163,7 @@ static rlm_csv_entry_t *file2csv(CONF_SECTION *conf, rlm_csv_t *inst, int lineno
 
 	MEM(e = (rlm_csv_entry_t *)talloc_zero_array(inst->tree, uint8_t,
 						     sizeof(*e) + inst->used_fields + sizeof(e->data[0])));
+	talloc_set_type(e, rlm_csv_entry_t);
 
 	for (p = buffer, i = 0; p != NULL; p = q, i++) {
 		if (!buf2entry(inst, p, &q)) {
@@ -365,7 +366,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 		return -1;
 	}
 
-	inst->tree = rbtree_create(inst, csv_entry_cmp, NULL, 0);
+	inst->tree = rbtree_talloc_create(inst, csv_entry_cmp, rlm_csv_entry_t, NULL, 0);
 	if (!inst->tree) goto oom;
 
 	/*

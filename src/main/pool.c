@@ -47,6 +47,7 @@ static int connection_check(fr_pool_t *pool, REQUEST *request);
 struct fr_pool_connection {
 	fr_pool_connection_t	*prev;			//!< Previous connection in list.
 	fr_pool_connection_t	*next;			//!< Next connection in list.
+	int32_t		heap_id;			//!< For the next connection heap.
 
 	time_t		created;		//!< Time connection was created.
 	struct timeval 	last_reserved;		//!< Last time the connection was reserved.
@@ -60,8 +61,6 @@ struct fr_pool_connection {
 	void		*connection;		//!< Pointer to whatever the module uses for a connection
 						//!< handle.
 	bool		in_use;			//!< Whether the connection is currently reserved.
-
-	int		heap;			//!< For the next connection heap.
 
 	bool		needs_reconnecting;	//!< Reconnect this connection before use.
 
@@ -1001,7 +1000,7 @@ fr_pool_t *fr_pool_init(TALLOC_CTX *ctx,
 	 *	https://code.facebook.com/posts/1499322996995183/solving-the-mystery-of-link-imbalance-a-metastable-failure-state-at-scale/
 	 */
 	if (!pool->spread) {
-		pool->heap = fr_heap_create(last_reserved_cmp, offsetof(fr_pool_t, heap));
+		pool->heap = fr_heap_talloc_create(last_reserved_cmp, fr_pool_connection_t, heap_id);
 	/*
 	 *	For some types of connections we need to used a different
 	 *	algorithm, because load balancing benefits are secondary
@@ -1021,7 +1020,7 @@ fr_pool_t *fr_pool_init(TALLOC_CTX *ctx,
 	 *	That way we maximise time between connection use.
 	 */
 	} else {
-		pool->heap = fr_heap_create(last_released_cmp, offsetof(fr_pool_t, heap));
+		pool->heap = fr_heap_talloc_create(last_released_cmp, fr_pool_connection_t, heap_id);
 	}
 	if (!pool->heap) {
 		ERROR("%s: Failed creating connection heap", __FUNCTION__);
