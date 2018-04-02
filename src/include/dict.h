@@ -137,19 +137,20 @@ typedef struct {
 /** Specifies an attribute which must be present for the module to function
  *
  */
-typedef struct fr_dict_attr_autoload {
+typedef struct {
 	fr_dict_attr_t const	**out;				//!< Where to write a pointer to the resolved
 								//!< #fr_dict_attr_t.
 	fr_dict_t const		**dict;				//!< The protocol dictionary the attribute should
-								//!< be resolved in.
+								///< be resolved in. ** so it's a compile time
+								///< constant.
 	char const		*name;				//!< of the attribute.
-	fr_type_t			type;				//!< of the attribute.  Mismatch is a fatal error.
+	fr_type_t		type;				//!< of the attribute.  Mismatch is a fatal error.
 } fr_dict_attr_autoload_t;
 
 /** Specifies a dictionary which must be loaded/loadable for the module to function
  *
  */
-typedef struct fr_dict_autoload {
+typedef struct {
 	fr_dict_t const		**out;				//!< Where to write a pointer to the loaded/resolved
 								//!< #fr_dict_t.
 	char const		*base_dir;			//!< Directory structure beneath share.
@@ -205,6 +206,8 @@ int			fr_dict_attr_add(fr_dict_t *dict, fr_dict_attr_t const *parent, char const
 
 int			fr_dict_enum_add_alias(fr_dict_attr_t const *da, char const *alias,
 					       fr_value_box_t const *value, bool coerce, bool replace);
+
+int			fr_dict_enum_add_alias_next(fr_dict_attr_t const *da, char const *alias) CC_HINT(nonnull);
 
 int			fr_dict_str_to_argv(char *str, char **argv, int max_argc);
 /** @} */
@@ -323,13 +326,11 @@ fr_dict_attr_t const	*fr_dict_attr_child_by_da(fr_dict_attr_t const *parent, fr_
 
 fr_dict_attr_t const	*fr_dict_attr_child_by_num(fr_dict_attr_t const *parent, unsigned int attr);
 
-fr_dict_enum_t		*fr_dict_enum_by_value(fr_dict_t *dict, fr_dict_attr_t const *da,
-					       fr_value_box_t const *value);
+fr_dict_enum_t		*fr_dict_enum_by_value(fr_dict_attr_t const *da, fr_value_box_t const *value);
 
-char const		*fr_dict_enum_alias_by_value(fr_dict_t *dict, fr_dict_attr_t const *da,
-						     fr_value_box_t const *value);
+char const		*fr_dict_enum_alias_by_value(fr_dict_attr_t const *da, fr_value_box_t const *value);
 
-fr_dict_enum_t		*fr_dict_enum_by_alias(fr_dict_t *dict, fr_dict_attr_t const *da, char const *alias);
+fr_dict_enum_t		*fr_dict_enum_by_alias(fr_dict_attr_t const *da, char const *alias);
 /** @} */
 
 /** @name Dictionary and protocol loading

@@ -210,16 +210,6 @@ typedef enum {
 } rad_master_state_t;
 #define REQUEST_MASTER_NUM_STATES (REQUEST_COUNTED + 1)
 
-typedef enum {
-	REQUEST_QUEUED = 1,
-	REQUEST_RUNNING,
-	REQUEST_PROXIED,
-	REQUEST_RESPONSE_DELAY,
-	REQUEST_CLEANUP_DELAY,
-	REQUEST_DONE
-} rad_child_state_t;
-#define REQUEST_CHILD_NUM_STATES (REQUEST_DONE + 1)
-
 typedef enum fr_request_state_t {
 	REQUEST_INIT = 0,
 	REQUEST_RECV,
@@ -536,6 +526,38 @@ int radius_copy_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, char con
 #define pair_make_request(_a, _b, _c) fr_pair_make(request->packet, &request->packet->vps, _a, _b, _c)
 #define pair_make_reply(_a, _b, _c) fr_pair_make(request->reply, &request->reply->vps, _a, _b, _c)
 #define pair_make_config(_a, _b, _c) fr_pair_make(request, &request->control, _a, _b, _c)
+
+/** Return or allocate a VALUE_PAIR in the request list
+ *
+ * @param[in] _da #fr_dict_attr_t of the pair to be found or allocated.
+ * @param[in] _tag tag of the attribute to be found or allocated.
+ */
+#define pair_update_request(_da, _tag) fr_pair_update_by_da(request->packet, &request->packet->vps, _da, _tag, false)
+
+/** Return or allocate a VALUE_PAIR in the reply list
+ *
+ * @param[in] _da #fr_dict_attr_t of the pair to be found or allocated.
+ * @param[in] _tag tag of the attribute to be found or allocated.
+ */
+#define pair_update_reply(_da, _tag) fr_pair_update_by_da(request->reply, &request->reply->vps, _da, _tag, false)
+
+/** Return or allocate a VALUE_PAIR in the control list
+ *
+ * @param[in] _da #fr_dict_attr_t of the pair to be found or allocated.
+ * @param[in] _tag tag of the attribute to be found or allocated.
+ */
+#define pair_update_control(_da, _tag) fr_pair_update_by_da(request, &request->control, _da, _tag, false)
+
+/* threads.c */
+int		thread_pool_bootstrap(CONF_SECTION *cs, bool *spawn_workers);
+int		thread_pool_init(void);
+void		thread_pool_stop(void);
+
+/*
+ *	In threads.c
+ */
+void request_enqueue(REQUEST *request);
+void request_queue_extract(REQUEST *request);
 
 REQUEST *request_setup(TALLOC_CTX *ctx, rad_listen_t *listener, RADIUS_PACKET *packet,
 		       RADCLIENT *client, RAD_REQUEST_FUNP fun);

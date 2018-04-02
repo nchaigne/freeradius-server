@@ -1841,7 +1841,7 @@ int fr_dict_enum_add_alias(fr_dict_attr_t const *da, char const *alias,
 			 *	name and value.  There are lots in
 			 *	dictionary.ascend.
 			 */
-			old = fr_dict_enum_by_alias(dict, da, alias);
+			old = fr_dict_enum_by_alias(da, alias);
 			if (!fr_cond_assert(old)) return -1;
 
 			if (fr_value_box_cmp(old->value, enumv->value) == 0) {
@@ -1879,6 +1879,85 @@ int fr_dict_enum_add_alias(fr_dict_attr_t const *da, char const *alias,
 		memcpy(&mutable, &da, sizeof(mutable));
 
 		mutable->flags.has_value = 1;
+	}
+
+	return 0;
+}
+
+/** Add an alias to an integer attribute hashing the alias for the integer value
+ *
+ */
+int fr_dict_enum_add_alias_next(fr_dict_attr_t const *da, char const *alias)
+{
+	fr_value_box_t	v = {
+				.type = da->type
+			};
+	fr_value_box_t	s = {
+				.type = da->type
+			};
+
+	if (fr_dict_enum_by_alias(da, alias)) return 0;
+
+	switch (da->type) {
+	case FR_TYPE_INT8:
+		v.vb_int8 = s.vb_int8 = fr_hash_string(alias) & INT8_MAX;
+		break;
+
+	case FR_TYPE_INT16:
+		v.vb_int16 = s.vb_int16 = fr_hash_string(alias) & INT16_MAX;
+		break;
+
+	case FR_TYPE_INT32:
+		v.vb_int32 = s.vb_int32 = fr_hash_string(alias) & INT32_MAX;
+		break;
+
+	case FR_TYPE_INT64:
+		v.vb_int64 = s.vb_int64 = fr_hash_string(alias) & INT64_MAX;
+		break;
+
+	case FR_TYPE_UINT8:
+		v.vb_uint8 = s.vb_uint8 = fr_hash_string(alias) & UINT8_MAX;
+		break;
+
+	case FR_TYPE_UINT16:
+		v.vb_uint16 = s.vb_uint16 = fr_hash_string(alias) & UINT16_MAX;
+		break;
+
+	case FR_TYPE_UINT32:
+		v.vb_uint32 = s.vb_uint32 = fr_hash_string(alias) & UINT32_MAX;
+		break;
+
+	case FR_TYPE_UINT64:
+		v.vb_uint64 = s.vb_uint64 = fr_hash_string(alias) & UINT64_MAX;
+		break;
+
+	default:
+		fr_strerror_printf("Attribute is wrong type for auto-numbering, expected numeric type, got %s",
+				   fr_int2str(dict_attr_types, da->type, "?Unknown?"));
+		return -1;
+	}
+
+	/*
+	 *	If there's no existing value, add an enum
+	 *	with the hash value of the alias.
+	 *
+	 *	This helps with debugging as the values
+	 *	are consistent.
+	 */
+	if (!fr_dict_enum_by_value(da, &v)) {
+	add:
+		return fr_dict_enum_add_alias(da, alias, &v, false, false);
+	}
+
+	for (;;) {
+		fr_value_box_increment(&v);
+
+		if (fr_value_box_cmp_op(T_OP_EQ, &v, &s) == 0) {
+			fr_strerror_printf("No free integer values for enumeration");
+			return -1;
+		}
+
+		if (!fr_dict_enum_by_value(da, &v)) goto add;
 	}
 
 	return 0;
@@ -3290,21 +3369,24 @@ inline fr_dict_attr_t const *fr_dict_attr_child_by_num(fr_dict_attr_t const *par
 
 /** Lookup the structure representing an enum value in a #fr_dict_attr_t
  *
- * @param[in] dict		of protocol context we're operating in.
- *				If NULL the internal dictionary will be used.
  * @param[in] da		to search in.
  * @param[in] value		to search for.
  * @return
  * 	- Matching #fr_dict_enum_t.
  * 	- NULL if no matching #fr_dict_enum_t could be found.
  */
-fr_dict_enum_t *fr_dict_enum_by_value(fr_dict_t *dict, fr_dict_attr_t const *da, fr_value_box_t const *value)
+fr_dict_enum_t *fr_dict_enum_by_value(fr_dict_attr_t const *da, fr_value_box_t const *value)
 {
-	fr_dict_enum_t enumv, *dv;
+	fr_dict_enum_t	enumv, *dv;
+	fr_dict_t	*dict;
 
 	if (!da) return NULL;
 
-	INTERNAL_IF_NULL(dict);
+	dict = fr_dict_by_da(da);
+	if (!dict) {
+		fr_strerror_printf("Attributes \"%s\" not present in any dictionaries", da->name);
+		return NULL;
+	}
 
 	/*
 	 *	Could be NULL or an unknown attribute, in which case
@@ -3332,23 +3414,26 @@ fr_dict_enum_t *fr_dict_enum_by_value(fr_dict_t *dict, fr_dict_attr_t const *da,
 
 /** Lookup the name of an enum value in a #fr_dict_attr_t
  *
- * @param[in] dict		of protocol context we're operating in.
- *				If NULL the internal dictionary will be used.
  * @param[in] da		to search in.
  * @param[in] value		number to search for.
  * @return
  * 	- Name of value.
  * 	- NULL if no matching value could be found.
  */
-char const *fr_dict_enum_alias_by_value(fr_dict_t *dict, fr_dict_attr_t const *da, fr_value_box_t const *value)
+char const *fr_dict_enum_alias_by_value(fr_dict_attr_t const *da, fr_value_box_t const *value)
 {
-	fr_dict_enum_t *dv;
+	fr_dict_enum_t	*dv;
+	fr_dict_t	*dict;
 
 	if (!da) return NULL;
 
-	INTERNAL_IF_NULL(dict);
+	dict = fr_dict_by_da(da);
+	if (!dict) {
+		fr_strerror_printf("Attributes \"%s\" not present in any dictionaries", da->name);
+		return NULL;
+	}
 
-	dv = fr_dict_enum_by_value(dict, da, value);
+	dv = fr_dict_enum_by_value(da, value);
 	if (!dv) return "";
 
 	return dv->alias;
@@ -3357,18 +3442,22 @@ char const *fr_dict_enum_alias_by_value(fr_dict_t *dict, fr_dict_attr_t const *d
 /*
  *	Get a value by its name, keyed off of an attribute.
  */
-fr_dict_enum_t *fr_dict_enum_by_alias(fr_dict_t *dict, fr_dict_attr_t const *da, char const *alias)
+fr_dict_enum_t *fr_dict_enum_by_alias(fr_dict_attr_t const *da, char const *alias)
 {
-	fr_dict_enum_t find, *found;
-
-	memset(&find, 0, sizeof(find));
+	fr_dict_enum_t	*found;
+	fr_dict_enum_t	find = {
+				.da = da,
+				.alias = alias
+			};
+	fr_dict_t	*dict;
 
 	if (!alias) return NULL;
 
-	INTERNAL_IF_NULL(dict);
-
-	find.da = da;
-	find.alias = alias;
+	dict = fr_dict_by_da(da);
+	if (!dict) {
+		fr_strerror_printf("Attributes \"%s\" not present in any dictionaries", da->name);
+		return NULL;
+	}
 
 	/*
 	 *	Look up the attribute alias target, and use
@@ -5148,15 +5237,22 @@ int fr_dict_attr_autoload(fr_dict_attr_autoload_t const *to_load)
 {
 	fr_dict_attr_t const	*da;
 
-	if (!to_load->dict || !*to_load->dict) {
+	if (!to_load->dict) {
+		fr_strerror_printf("Invalid autoload entry, missing dictionary pointer");
+		return -1;
+	}
+
+#if 0
+	if (!*to_load->dict) {
 		fr_strerror_printf("Missing dictionary required for attribute autoresolution");
 		return -1;
 	}
+#endif
 
 	da = fr_dict_attr_by_name(*to_load->dict, to_load->name);
 	if (!da) {
 		fr_strerror_printf("Attribute \"%s\" not found in %s dictionary", to_load->name,
-				   (*to_load->dict)->root->name);
+				   *to_load->dict ? (*to_load->dict)->root->name : "internal");
 		return -1;
 	}
 
