@@ -162,7 +162,7 @@ typedef void (*fr_unlang_module_fd_event_t)(REQUEST *request, void *instance, vo
  * @param[in] rctx		a local context for the callback.
  * @return a normal rlm_rcode_t.
  */
-typedef rlm_rcode_t (*fr_module_unlang_resume_t)(REQUEST *request, void *instance, void *thread, void *rctx);
+typedef rlm_rcode_t (*fr_unlang_module_resume_t)(REQUEST *request, void *instance, void *thread, void *rctx);
 
 /** A callback when the request gets a fr_state_signal_t.
  *
@@ -177,7 +177,7 @@ typedef rlm_rcode_t (*fr_module_unlang_resume_t)(REQUEST *request, void *instanc
  * @param[in] rctx		Resume ctx for the callback.
  * @param[in] action		which is signalling the request.
  */
-typedef void (*fr_module_unlang_signal_t)(REQUEST *request, void *instance, void *thread,
+typedef void (*fr_unlang_module_signal_t)(REQUEST *request, void *instance, void *thread,
 					  void *rctx, fr_state_signal_t action);
 
 /** Struct exported by a rlm_* module
@@ -231,14 +231,16 @@ typedef struct {
  * Stores module and thread specific data.
  */
 typedef struct {
+	void				*data;		//!< Thread specific instance data.
+
 	fr_event_list_t			*el;		//!< Event list associated with this thread.
+
+	rad_module_t const		*module;	//!< Public module structure.  Cached for convenience,
+							///< and to prevent use-after-free if the global data
+							///< is freed before the thread instance data.
 
 	void				*mod_inst;	//!< Avoids thread_inst->inst->dl_inst->data.
 							///< This is in the hot path, so it makes sense.
-
-	module_instance_t		*inst;		//!< Non-thread local instance of this
-
-	void				*data;		//!< Thread specific instance data.
 
 	uint64_t			total_calls;	//! total number of times we've been called
 	uint64_t			active_callers; //! number of active callers.  i.e. number of current yields
@@ -266,7 +268,7 @@ exfile_t *module_exfile_init(TALLOC_CTX *ctx,
  */
 module_thread_instance_t *module_thread_instance_find(module_instance_t *mi);
 void		*module_thread_instance_by_data(void *mod_data);
-int		modules_thread_instantiate(CONF_SECTION *root, fr_event_list_t *el) CC_HINT(nonnull);
+int		modules_thread_instantiate(TALLOC_CTX *ctx, CONF_SECTION *root, fr_event_list_t *el) CC_HINT(nonnull);
 int		modules_instantiate(CONF_SECTION *root) CC_HINT(nonnull);
 int		modules_bootstrap(CONF_SECTION *root) CC_HINT(nonnull);
 int		modules_free(void);
@@ -300,7 +302,7 @@ int		virtual_server_namespace_register(char const *namespace, fr_virtual_server_
 void		fr_request_async_bootstrap(REQUEST *request, fr_event_list_t *el); /* for unit_test_module */
 
 /*
- *	module_unlang.c
+ *	unlang_module.c
  */
 int		unlang_event_module_timeout_add(REQUEST *request, fr_unlang_module_timeout_t callback,
 						void const *ctx, struct timeval *timeout);
@@ -315,15 +317,15 @@ int		unlang_event_timeout_delete(REQUEST *request, void const *ctx);
 
 int		unlang_event_fd_delete(REQUEST *request, void const *ctx, int fd);
 
-rlm_rcode_t	module_unlang_push_xlat(TALLOC_CTX *ctx, fr_value_box_t **out,
+rlm_rcode_t	unlang_module_push_xlat(TALLOC_CTX *ctx, fr_value_box_t **out,
 					REQUEST *request, xlat_exp_t const *xlat,
-					fr_module_unlang_resume_t callback,
-					fr_module_unlang_signal_t signal_callback, void *uctx);
+					fr_unlang_module_resume_t callback,
+					fr_unlang_module_signal_t signal_callback, void *uctx);
 
-rlm_rcode_t	unlang_module_yield(REQUEST *request, fr_module_unlang_resume_t callback,
-				    fr_module_unlang_signal_t signal_callback, void *ctx);
+rlm_rcode_t	unlang_module_yield(REQUEST *request, fr_unlang_module_resume_t callback,
+				    fr_unlang_module_signal_t signal_callback, void *ctx);
 
-void		module_unlang_init(void);
+void		unlang_module_init(void);
 #ifdef __cplusplus
 }
 #endif

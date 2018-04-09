@@ -17,7 +17,7 @@
 /**
  * $Id$
  *
- * @file unlang_interpret.c
+ * @file unlang/interpret.c
  * @brief Execute compiled unlang structures using an iterative interpreter.
  *
  * @copyright 2006-2016 The FreeRADIUS server project
@@ -52,12 +52,12 @@ static uint64_t unlang_active_callers(unlang_t *instruction)
 	default:
 		return 0;
 
-	case UNLANG_TYPE_MODULE_CALL:
+	case UNLANG_TYPE_MODULE:
 	{
 		module_thread_instance_t *thread;
-		module_unlang_call_t *sp;
+		unlang_module_t *sp;
 
-		sp = unlang_generic_to_module_call(instruction);
+		sp = unlang_generic_to_module(instruction);
 		rad_assert(sp != NULL);
 
 		thread = module_thread_instance_find(sp->module_instance);
@@ -296,15 +296,15 @@ static unlang_action_t unlang_load_balance(REQUEST *request,
 				uint64_t active_callers;
 				unlang_t *child = redundant->child;
 
-				if (child->type != UNLANG_TYPE_MODULE_CALL) {
+				if (child->type != UNLANG_TYPE_MODULE) {
 					active_callers = unlang_active_callers(child);
 					RDEBUG3("load-balance child %d sub-section has %" PRIu64 " active", num, active_callers);
 
 				} else {
 					module_thread_instance_t *thread;
-					module_unlang_call_t *sp;
+					unlang_module_t *sp;
 
-					sp = unlang_generic_to_module_call(child);
+					sp = unlang_generic_to_module(child);
 					rad_assert(sp != NULL);
 
 					thread = module_thread_instance_find(sp->module_instance);
@@ -1645,23 +1645,23 @@ void unlang_op_initialize(void)
 {
 	unlang_op_register(UNLANG_TYPE_FUNCTION,
 			   &(unlang_op_t){
-			   	.name = "function",
-			   	.func = unlang_function_call,
-			   	.debug_braces = false
+				.name = "function",
+				.func = unlang_function_call,
+				.debug_braces = false
 			   });
 
 	unlang_op_register(UNLANG_TYPE_GROUP,
 			   &(unlang_op_t){
-			   	.name = "group",
-			   	.func = unlang_group,
-			   	.debug_braces = true
+				.name = "group",
+				.func = unlang_group,
+				.debug_braces = true
 			   });
 
 	unlang_op_register(UNLANG_TYPE_LOAD_BALANCE,
 			   &(unlang_op_t){
-			   	.name = "load-balance group",
-			   	.func = unlang_load_balance,
-			   	.debug_braces = true
+				.name = "load-balance group",
+				.func = unlang_load_balance,
+				.debug_braces = true
 			   });
 
 	unlang_op_register(UNLANG_TYPE_REDUNDANT_LOAD_BALANCE,
@@ -1765,7 +1765,7 @@ void unlang_op_initialize(void)
 				.debug_braces = true
 			   });
 
-	map_unlang_init();
-	module_unlang_init();
+	unlang_map_init();
+	unlang_module_init();
 #endif
 }

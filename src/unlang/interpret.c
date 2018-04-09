@@ -17,7 +17,7 @@
 /**
  * $Id$
  *
- * @file unlang_interpret.c
+ * @file unlang/interpret.c
  * @brief Execute compiled unlang structures using an iterative interpreter.
  *
  * @copyright 2006-2016 The FreeRADIUS server project
@@ -773,7 +773,7 @@ rlm_rcode_t unlang_interpret_synchronous(REQUEST *request, CONF_SECTION *cs, rlm
 		return RLM_MODULE_FAIL;
 	}
 
-	MEM(backlog = fr_heap_talloc_create(_unlang_request_ptr_cmp, REQUEST, runnable_id));
+	MEM(backlog = fr_heap_talloc_create(el, _unlang_request_ptr_cmp, REQUEST, runnable_id));
 	old_el = request->el;
 	old_backlog = request->backlog;
 	caller = request->module;
@@ -806,7 +806,6 @@ rlm_rcode_t unlang_interpret_synchronous(REQUEST *request, CONF_SECTION *cs, rlm
 
 	talloc_free(el);
 	request->el = old_el;
-	talloc_free(backlog);
 	request->backlog = old_backlog;
 	request->module = caller;
 
@@ -990,14 +989,14 @@ int unlang_event_module_timeout_add(REQUEST *request, fr_unlang_module_timeout_t
 	unlang_stack_t			*stack = request->stack;
 	unlang_stack_frame_t		*frame = &stack->frame[stack->depth];
 	unlang_event_t			*ev;
-	module_unlang_call_t		*sp;
-	unlang_frame_state_modcall_t	*ms = talloc_get_type_abort(frame->state,
-								    unlang_frame_state_modcall_t);
+	unlang_module_t		*sp;
+	unlang_frame_state_module_t	*ms = talloc_get_type_abort(frame->state,
+								    unlang_frame_state_module_t);
 
 	rad_assert(stack->depth > 0);
-	rad_assert((frame->instruction->type == UNLANG_TYPE_MODULE_CALL) ||
+	rad_assert((frame->instruction->type == UNLANG_TYPE_MODULE) ||
 		   (frame->instruction->type == UNLANG_TYPE_RESUME));
-	sp = unlang_generic_to_module_call(frame->instruction);
+	sp = unlang_generic_to_module(frame->instruction);
 
 	ev = talloc_zero(request, unlang_event_t);
 	if (!ev) return -1;
@@ -1075,15 +1074,15 @@ int unlang_event_fd_add(REQUEST *request,
 	unlang_stack_t			*stack = request->stack;
 	unlang_stack_frame_t		*frame = &stack->frame[stack->depth];
 	unlang_event_t			*ev;
-	module_unlang_call_t		*sp;
-	unlang_frame_state_modcall_t	*ms = talloc_get_type_abort(frame->state,
-									       unlang_frame_state_modcall_t);
+	unlang_module_t		*sp;
+	unlang_frame_state_module_t	*ms = talloc_get_type_abort(frame->state,
+								    unlang_frame_state_module_t);
 
 	rad_assert(stack->depth > 0);
 
-	rad_assert((frame->instruction->type == UNLANG_TYPE_MODULE_CALL) ||
+	rad_assert((frame->instruction->type == UNLANG_TYPE_MODULE) ||
 		   (frame->instruction->type == UNLANG_TYPE_RESUME));
-	sp = unlang_generic_to_module_call(frame->instruction);
+	sp = unlang_generic_to_module(frame->instruction);
 
 	ev = talloc_zero(request, unlang_event_t);
 	if (!ev) return -1;
@@ -1134,17 +1133,24 @@ int unlang_event_fd_delete(REQUEST *request, void const *ctx, int fd)
 	return 0;
 }
 
+
+
 /** Send a signal (usually stop) to a request
  *
  * This is typically called via an "async" action, i.e. an action
  * outside of the normal processing of the request.
  *
- * If there is no #fr_module_unlang_signal_t callback defined, the action is ignored.
+ * If there is no #fr_unlang_module_signal_t callback defined, the action is ignored.
+ *
+ * The signaling stops at the "limit" frame.  This is so that keywords
+ * such as "timeout" and "limit" can signal frames *lower* than theirs
+ * to stop, but then continue with their own work.
  *
  * @param[in] request		The current request.
  * @param[in] action		to signal.
+ * @param[in] limit		the frame at which to stop signaling.
  */
-void unlang_signal(REQUEST *request, fr_state_signal_t action)
+static void unlang_signal_frames(REQUEST *request, fr_state_signal_t action, int limit)
 {
 	unlang_stack_frame_t	*frame;
 	unlang_stack_t		*stack = request->stack;
@@ -1164,7 +1170,7 @@ void unlang_signal(REQUEST *request, fr_state_signal_t action)
 	 *	stack, as modules can push xlats and function
 	 *	calls.
 	 */
-	for (i = depth; i > 0; i--) {
+	for (i = depth; i > limit; i--) {
 		stack->depth = i;			/* We could also pass in the frame to the signal function */
 		frame = &stack->frame[stack->depth];
 
@@ -1185,6 +1191,22 @@ void unlang_signal(REQUEST *request, fr_state_signal_t action)
 		unlang_ops[mr->parent->type].signal(request, mr->rctx, action);
 	}
 	stack->depth = depth;				/* Reset */
+}
+
+
+/** Send a signal (usually stop) to a request
+ *
+ * This is typically called via an "async" action, i.e. an action
+ * outside of the normal processing of the request.
+ *
+ * If there is no #fr_unlang_module_signal_t callback defined, the action is ignored.
+ *
+ * @param[in] request		The current request.
+ * @param[in] action		to signal.
+ */
+void unlang_signal(REQUEST *request, fr_state_signal_t action)
+{
+	return unlang_signal_frames(request, action, 0);
 }
 
 int unlang_stack_depth(REQUEST *request)
@@ -1427,8 +1449,8 @@ static unlang_action_t unlang_resume(REQUEST *request, rlm_rcode_t *presult, int
  *	- RLM_MODULE_FAIL (or asserts) if the current frame is not a module call or
  *	  resume frame.
  */
-rlm_rcode_t unlang_module_yield(REQUEST *request, fr_module_unlang_resume_t callback,
-				fr_module_unlang_signal_t cancel, void *rctx)
+rlm_rcode_t unlang_module_yield(REQUEST *request, fr_unlang_module_resume_t callback,
+				fr_unlang_module_signal_t cancel, void *rctx)
 {
 	unlang_stack_t			*stack = request->stack;
 	unlang_stack_frame_t		*frame = &stack->frame[stack->depth];
@@ -1439,7 +1461,7 @@ rlm_rcode_t unlang_module_yield(REQUEST *request, fr_module_unlang_resume_t call
 	REQUEST_VERIFY(request);	/* Check the yielded request is sane */
 
 	switch (frame->instruction->type) {
-	case UNLANG_TYPE_MODULE_CALL:
+	case UNLANG_TYPE_MODULE:
 		mr = unlang_resume_alloc(request, callback, cancel, rctx);
 		if (!fr_cond_assert(mr)) {
 			return RLM_MODULE_FAIL;
@@ -1448,7 +1470,7 @@ rlm_rcode_t unlang_module_yield(REQUEST *request, fr_module_unlang_resume_t call
 
 	case UNLANG_TYPE_RESUME:
 		mr = talloc_get_type_abort(frame->instruction, unlang_resume_t);
-		rad_assert(mr->parent->type == UNLANG_TYPE_MODULE_CALL);
+		rad_assert(mr->parent->type == UNLANG_TYPE_MODULE);
 
 		/*
 		 *	Re-use the current RESUME frame, but over-ride

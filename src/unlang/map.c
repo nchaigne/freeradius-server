@@ -18,7 +18,7 @@
  * $Id$
  *
  * @brief map and unlang integration.
- * @file main/map_unlang.c
+ * @file unlang/map.c
  *
  * @ingroup AVP
  *
@@ -32,7 +32,7 @@ RCSID("$Id$")
 #include <freeradius-devel/map.h>
 #include <freeradius-devel/xlat.h>
 
-#include "map_proc_priv.h"
+#include "../main/map_proc_priv.h"
 #include "unlang_priv.h"
 
 typedef enum {
@@ -124,7 +124,7 @@ static unlang_action_t unlang_update(REQUEST *request, rlm_rcode_t *presult, int
 				break;
 
 			case TMPL_TYPE_XLAT_STRUCT:
-				xlat_unlang_push(update_state, &update_state->lhs_result,
+				unlang_xlat_push(update_state, &update_state->lhs_result,
 						 request, map->lhs->tmpl_xlat, false);
 				return UNLANG_ACTION_PUSHED_CHILD;
 
@@ -151,7 +151,7 @@ static unlang_action_t unlang_update(REQUEST *request, rlm_rcode_t *presult, int
 			 */
 			if (update_state->lhs_result &&
 			    (fr_value_box_list_concat(update_state, update_state->lhs_result, &update_state->lhs_result,
-			    			      FR_TYPE_STRING, true) < 0)) {
+						      FR_TYPE_STRING, true) < 0)) {
 				RPEDEBUG("Failed concatenating LHS expansion results");
 				goto error;
 			}
@@ -161,7 +161,7 @@ static unlang_action_t unlang_update(REQUEST *request, rlm_rcode_t *presult, int
 				break;
 
 			case TMPL_TYPE_XLAT_STRUCT:
-				xlat_unlang_push(update_state, &update_state->rhs_result,
+				unlang_xlat_push(update_state, &update_state->rhs_result,
 						 request, map->rhs->tmpl_xlat, false);
 				return UNLANG_ACTION_PUSHED_CHILD;
 
@@ -181,7 +181,7 @@ static unlang_action_t unlang_update(REQUEST *request, rlm_rcode_t *presult, int
 			 */
 			if (update_state->rhs_result &&
 			    (fr_value_box_list_concat(update_state, update_state->rhs_result, &update_state->rhs_result,
-			    			      FR_TYPE_STRING, true) < 0)) {
+						      FR_TYPE_STRING, true) < 0)) {
 				RPEDEBUG("Failed concatenating RHS expansion results");
 				goto error;
 			}
@@ -222,7 +222,7 @@ static unlang_action_t unlang_update(REQUEST *request, rlm_rcode_t *presult, int
 			int ret;
 
 			ret = map_list_mod_apply(request, vlm);
-		     	if (!fr_cond_assert(ret == 0)) goto error;
+			if (!fr_cond_assert(ret == 0)) goto error;
 		}
 
 	}
@@ -266,7 +266,7 @@ static unlang_action_t unlang_map(REQUEST *request, rlm_rcode_t *presult, int *p
 			break;
 
 		case TMPL_TYPE_XLAT_STRUCT:
-			xlat_unlang_push(map_proc_state, &map_proc_state->src_result,
+			unlang_xlat_push(map_proc_state, &map_proc_state->src_result,
 					 request, inst->src->tmpl_xlat, false);
 			return UNLANG_ACTION_PUSHED_CHILD;
 
@@ -296,7 +296,7 @@ static unlang_action_t unlang_map(REQUEST *request, rlm_rcode_t *presult, int *p
 	return *presult == RLM_MODULE_YIELD ? UNLANG_ACTION_YIELD : UNLANG_ACTION_CALCULATE_RESULT;
 }
 
-void map_unlang_init(void)
+void unlang_map_init(void)
 {
 	unlang_op_register(UNLANG_TYPE_UPDATE,
 			   &(unlang_op_t){

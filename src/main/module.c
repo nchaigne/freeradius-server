@@ -33,7 +33,7 @@ RCSID("$Id$")
 #include <freeradius-devel/parser.h>
 #include <freeradius-devel/unlang.h>
 
-fr_thread_local_setup(rbtree_t *, module_thread_inst_tree)
+static _Thread_local rbtree_t *module_thread_inst_tree;
 
 static TALLOC_CTX *instance_ctx = NULL;
 
@@ -492,22 +492,10 @@ static void _module_thread_instance_free(void *to_free)
 {
 	module_thread_instance_t *ti = talloc_get_type_abort(to_free, module_thread_instance_t);
 
-	if (ti->inst->module->thread_detach) {
-		(void) ti->inst->module->thread_detach(ti->el, ti->data);
-	}
+	DEBUG4("Worker cleaning up %s thread instance data (%p/%p)", ti->module->name, ti, ti->data);
+	if (ti->module->thread_detach) (void) ti->module->thread_detach(ti->el, ti->data);
 
 	talloc_free(ti);
-}
-
-/** Frees the thread local instance free and any thread local instance data
- *
- * @param[in] to_free	Thread specific module instance tree to free.
- */
-static void _module_thread_inst_tree_free(void *to_free)
-{
-	rbtree_t *thread_inst_tree = talloc_get_type_abort(to_free , rbtree_t);
-
-	talloc_free(thread_inst_tree);
 }
 
 /** Compare two thread instances based on inst pointer
@@ -546,9 +534,9 @@ static int _module_thread_instantiate(void *instance, void *ctx)
 	_thread_intantiate_ctx_t	*thread_inst_ctx = ctx;
 	int				ret;
 
-	MEM(ti = talloc_zero(NULL, module_thread_instance_t));
+	MEM(ti = talloc_zero(thread_inst_ctx->tree, module_thread_instance_t));
 	ti->el = thread_inst_ctx->el;
-	ti->inst = mi;
+	ti->module = mi->module;
 	ti->mod_inst = mi->dl_inst->data;	/* For efficient lookups */
 
 	if (mi->module->thread_inst_size) {
@@ -563,19 +551,17 @@ static int _module_thread_instantiate(void *instance, void *ctx)
 		MEM(type_name = talloc_typed_asprintf(NULL, "rlm_%s_thread_t", mi->module->name));
 		talloc_set_name(ti->data, "%s", type_name);
 		talloc_free(type_name);
-
 	}
 
+	DEBUG4("Worker alloced %s thread instance data (%p/%p)", ti->module->name, ti, ti->data);
 	if (mi->module->thread_instantiate) {
 		ret = mi->module->thread_instantiate(mi->dl_inst->conf, mi->dl_inst->data,
-							   thread_inst_ctx->el, ti->data);
+						     thread_inst_ctx->el, ti->data);
 		if (ret < 0) {
-			ERROR("Thread instantiation failed for module \"%s\"",
-			      mi->name);
+			ERROR("Thread instantiation failed for module \"%s\"", mi->name);
 			return -1;
 		}
 	}
-
 
 	rbtree_insert(thread_inst_ctx->tree, ti);
 
@@ -586,35 +572,33 @@ static int _module_thread_instantiate(void *instance, void *ctx)
  *
  * Must be called by any new threads before attempting to execute unlang sections.
  *
+ * @param[in] ctx	to bind instance tree lifetime to.  Must not be
+ *			shared between multiple threads.
  * @param[in] root	Configuration root.
  * @param[in] el	Event list servived by this thread.
  * @return
  *	- 0 on success.
  *	- -1 on failure.
  */
-int modules_thread_instantiate(CONF_SECTION *root, fr_event_list_t *el)
+int modules_thread_instantiate(TALLOC_CTX *ctx, CONF_SECTION *root, fr_event_list_t *el)
 {
 	CONF_SECTION			*modules;
-	rbtree_t			*thread_inst_tree;
-	_thread_intantiate_ctx_t	ctx;
+	_thread_intantiate_ctx_t	uctx;
 
 	modules = cf_section_find(root, "modules", NULL);
 	if (!modules) return 0;
 
-	thread_inst_tree = module_thread_inst_tree;
-	if (!thread_inst_tree) {
-		MEM(thread_inst_tree = rbtree_talloc_create(NULL, _module_thread_inst_tree_cmp,
-							    module_thread_instance_t, _module_thread_instance_free, 0));
-		fr_thread_local_set_destructor(module_thread_inst_tree,
-					       _module_thread_inst_tree_free, thread_inst_tree);
+	if (!module_thread_inst_tree) {
+		MEM(module_thread_inst_tree = rbtree_talloc_create(ctx, _module_thread_inst_tree_cmp,
+							    	   module_thread_instance_t,
+							    	   _module_thread_instance_free, 0));
 	}
 
-	ctx.el = el;
-	ctx.tree = thread_inst_tree;
+	uctx.el = el;
+	uctx.tree = module_thread_inst_tree;
 
-	if (cf_data_walk(modules, module_instance_t, _module_thread_instantiate, &ctx) < 0) {
-		_module_thread_inst_tree_free(thread_inst_tree);	/* make re-entrant */
-		module_thread_inst_tree = NULL;
+	if (cf_data_walk(modules, module_instance_t, _module_thread_instantiate, &uctx) < 0) {
+		TALLOC_FREE(module_thread_inst_tree);
 		return -1;
 	}
 

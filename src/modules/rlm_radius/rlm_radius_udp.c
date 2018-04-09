@@ -2594,13 +2594,13 @@ static int mod_thread_instantiate(UNUSED CONF_SECTION const *cs, void *instance,
 	t->inst = instance;
 	t->el = el;
 
-	t->queued = fr_heap_talloc_create(queue_cmp, rlm_radius_udp_request_t, heap_id);
+	t->queued = fr_heap_talloc_create(t, queue_cmp, rlm_radius_udp_request_t, heap_id);
 	FR_DLIST_INIT(t->blocked);
 	FR_DLIST_INIT(t->full);
 	FR_DLIST_INIT(t->zombie);
 	FR_DLIST_INIT(t->opening);
 
-	t->active = fr_heap_talloc_create(conn_cmp, rlm_radius_udp_connection_t, heap_id);
+	t->active = fr_heap_talloc_create(t, conn_cmp, rlm_radius_udp_connection_t, heap_id);
 
 	conn_alloc(t->inst, t);
 
@@ -2624,8 +2624,6 @@ static int mod_thread_detach(UNUSED fr_event_list_t *el, void *thread)
 	 *	Free all of the heaps, lists, and sockets.
 	 */
 	talloc_free_children(t);
-	talloc_free(t->queued);
-	talloc_free(t->active);
 
 	entry = FR_DLIST_FIRST(t->opening);
 	if (entry != NULL) {
@@ -2650,7 +2648,10 @@ fr_radius_client_io_t rlm_radius_udp = {
 	.magic			= RLM_MODULE_INIT,
 	.name			= "radius_udp",
 	.inst_size		= sizeof(rlm_radius_udp_t),
+
 	.request_inst_size 	= sizeof(rlm_radius_udp_request_t),
+	.request_inst_type	= "rlm_radius_udp_request_t",
+
 	.thread_inst_size	= sizeof(rlm_radius_udp_thread_t),
 
 	.config			= module_config,

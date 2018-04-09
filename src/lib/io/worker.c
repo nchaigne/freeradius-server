@@ -65,6 +65,7 @@ RCSID("$Id$")
 #include <freeradius-devel/io/channel.h>
 #include <freeradius-devel/io/message.h>
 #include <freeradius-devel/io/listen.h>
+#include <freeradius-devel/io/schedule.h>
 
 /**
  *  Track things by priority and time.
@@ -163,7 +164,7 @@ static void fr_worker_post_event(fr_event_list_t *el, struct timeval *now, void 
  */
 #define WORKER_HEAP_INIT(_name, _func, _type, _member) do { \
 		FR_DLIST_INIT(worker->_name.list); \
-		worker->_name.heap = fr_heap_create(_func, _type, _member); \
+		worker->_name.heap = fr_heap_create(worker, _func, _type, _member); \
 		if (!worker->_name.heap) { \
 			(void) fr_event_user_delete(worker->el, fr_worker_evfilt_user, worker); \
 			talloc_free(worker); \
@@ -660,7 +661,7 @@ static void worker_reset_timer(fr_worker_t *worker)
 	worker->next_cleanup = cleanup;
 	fr_time_to_timeval(&when, cleanup);
 
-	DEBUG2("Resetting worker cleanup timer to +%ds", worker->max_request_time);
+	DEBUG2("Resetting worker %i cleanup timer to +%ds", worker->max_request_time, fr_schedule_worker_id());
 	if (fr_event_timer_insert(worker, worker->el, &worker->ev_cleanup,
 				  &when, fr_worker_max_request_time, worker) < 0) {
 		ERROR("Failed inserting max_request_time timer.");
@@ -755,6 +756,7 @@ static void fr_worker_check_timeouts(fr_worker_t *worker, fr_time_t now)
  */
 static REQUEST *fr_worker_get_request(fr_worker_t *worker, fr_time_t now)
 {
+	bool			is_dup;
 	int			ret = -1;
 	fr_channel_data_t	*cd;
 	REQUEST			*request;
@@ -768,7 +770,7 @@ static REQUEST *fr_worker_get_request(fr_worker_t *worker, fr_time_t now)
 	 */
 	request = fr_heap_pop(worker->runnable);
 	if (request) {
-		DEBUG3("Worker found runnable request.");
+		DEBUG3("Worker %i found runnable request", fr_schedule_worker_id());
 		REQUEST_VERIFY(request);
 		rad_assert(request->runnable_id < 0);
 		fr_time_tracking_resume(&request->async->tracking, now);
@@ -785,11 +787,11 @@ static REQUEST *fr_worker_get_request(fr_worker_t *worker, fr_time_t now)
 			WORKER_HEAP_POP(to_decode, cd, request.list);
 		}
 		if (!cd) {
-			DEBUG3("Worker localized and decode lists are empty.");
+			DEBUG3("Worker %i localized and decode lists are empty", fr_schedule_worker_id());
 			return NULL;
 		}
 
-		DEBUG3("Worker found request to decode.");
+		DEBUG3("Worker %i found request to decode", fr_schedule_worker_id());
 		worker->num_decoded++;
 	} while (!cd);
 
@@ -846,9 +848,6 @@ static REQUEST *fr_worker_get_request(fr_worker_t *worker, fr_time_t now)
 	}
 
 	if (ret < 0) {
-		RINDENT();
-		REDEBUG("%s FAILED decoding packet", worker->name);
-		REXDENT();
 		talloc_free(ctx);
 nak:
 		fr_worker_nak(worker, cd, now);
@@ -870,6 +869,7 @@ nak:
 	/*
 	 *	We're done with this message.
 	 */
+	is_dup = cd->request.is_dup;
 	fr_message_done(&cd->m);
 
 	/*
@@ -885,7 +885,7 @@ nak:
 			 *	Ignore duplicate packets where we've
 			 *	already sent the reply.
 			 */
-			if (cd->request.is_dup) {
+			if (is_dup) {
 				RDEBUG("Got duplicate packet notice after we had sent a reply - ignoring");
 				fr_channel_null_reply(request->async->channel);
 				return NULL;
@@ -1103,7 +1103,7 @@ static int fr_worker_pre_event(void *ctx, struct timeval *wake)
 	 *	are still sleeping.
 	 */
 	if (worker->was_sleeping) {
-		DEBUG3("\tworker was sleeping, not re-signaling");
+		DEBUG3("Worker %i was sleeping, not re-signaling", fr_schedule_worker_id());
 		return 0;
 	}
 
@@ -1217,10 +1217,7 @@ void fr_worker_destroy(fr_worker_t *worker)
 		worker_stop_request(worker, request, now);
 		talloc_free(request);
 	}
-	talloc_free(worker->time_order);
-
 	rad_assert(fr_heap_num_elements(worker->runnable) == 0);
-	talloc_free(worker->runnable);
 
 #if 0
 	/*
@@ -1336,13 +1333,13 @@ nomem:
 	WORKER_HEAP_INIT(to_decode, worker_message_cmp, fr_channel_data_t, channel.heap_id);
 	WORKER_HEAP_INIT(localized, worker_message_cmp, fr_channel_data_t, channel.heap_id);
 
-	worker->runnable = fr_heap_talloc_create(worker_runnable_cmp, REQUEST, runnable_id);
+	worker->runnable = fr_heap_talloc_create(worker, worker_runnable_cmp, REQUEST, runnable_id);
 	if (!worker->runnable) {
 		fr_strerror_printf("Failed creating runnable heap");
 		goto fail;
 	}
 
-	worker->time_order = fr_heap_talloc_create(worker_time_order_cmp, REQUEST, time_order_id);
+	worker->time_order = fr_heap_talloc_create(worker, worker_time_order_cmp, REQUEST, time_order_id);
 	if (!worker->time_order) {
 		fr_strerror_printf("Failed creating time_order heap");
 		goto fail;
@@ -1463,7 +1460,7 @@ void fr_worker(fr_worker_t *worker)
 		 */
 		wait_for_event = (fr_heap_num_elements(worker->runnable) == 0);
 		if (wait_for_event) {
-			DEBUG("Ready to process requests.");
+			DEBUG2("Worker %i ready to process requests", fr_schedule_worker_id());
 		}
 
 		/*

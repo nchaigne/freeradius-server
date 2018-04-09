@@ -27,6 +27,7 @@ RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/rad_assert.h>
+#include <freeradius-devel/io/schedule.h>
 
 #include <ctype.h>
 
@@ -38,7 +39,7 @@ static rbtree_t *xlat_inst_tree;
 
 /** Holds thread specific instance data created by xlat_instantiate
  */
-fr_thread_local_setup(rbtree_t *, xlat_thread_inst_tree)
+static _Thread_local rbtree_t *xlat_thread_inst_tree;
 
 /** Compare two xlat instances based on node pointer
  *
@@ -97,17 +98,10 @@ static int _xlat_thread_inst_detach(xlat_thread_inst_t *thread_inst)
 static void _xlat_thread_inst_free(void *to_free)
 {
 	xlat_thread_inst_t *thread_inst = talloc_get_type_abort(to_free, xlat_thread_inst_t);
-	talloc_free(thread_inst);
-}
 
-/** Frees the thread local instance free and any thread local instance data
- *
- * @param[in] to_free	Thread specific module instance tree to free.
- */
-static void _xlat_thread_inst_tree_free(void *to_free)
-{
-	rbtree_t *thread_inst_tree = talloc_get_type_abort(to_free , rbtree_t);
-	talloc_free(thread_inst_tree);
+	DEBUG4("Worker cleaning up xlat thread instance (%p/%p)", thread_inst, thread_inst->data);
+
+	talloc_free(thread_inst);
 }
 
 /** Create thread instances where needed
@@ -153,6 +147,8 @@ static xlat_thread_inst_t *xlat_thread_inst_alloc(TALLOC_CTX *ctx, xlat_inst_t *
 		talloc_set_name_const(thread_inst->data, inst->node->xlat->thread_inst_type);
 #endif
 	}
+
+	DEBUG4("Worker alloced xlat thread instance (%p/%p)", thread_inst, thread_inst->data);
 
 	return thread_inst;
 }
@@ -299,12 +295,12 @@ int xlat_instantiate_ephemeral(xlat_exp_t *root)
 /** Walker callback for xlat_inst_tree
  *
  */
-static int _xlat_thread_instantiate(UNUSED void *ctx, void *data)
+static int _xlat_thread_instantiate(void *ctx, void *data)
 {
 	xlat_thread_inst_t	*thread_inst;
 	xlat_inst_t		*inst = talloc_get_type_abort(data, xlat_inst_t);
 
-	thread_inst = xlat_thread_inst_alloc(NULL, data);
+	thread_inst = xlat_thread_inst_alloc(ctx, data);
 	if (!thread_inst) return -1;
 
 	DEBUG3("Instantiating xlat \"%s\" node %p, instance %p, new thread instance %p",
@@ -313,7 +309,8 @@ static int _xlat_thread_instantiate(UNUSED void *ctx, void *data)
 	if (inst->node->xlat->thread_instantiate) {
 		int ret;
 
-		ret = inst->node->xlat->thread_instantiate(inst->data, thread_inst->data, inst->node, inst->node->xlat->uctx);
+		ret = inst->node->xlat->thread_instantiate(inst->data, thread_inst->data,
+							   inst->node, inst->node->xlat->uctx);
 		if (ret < 0) {
 			talloc_free(thread_inst);
 			return -1;
@@ -356,26 +353,30 @@ xlat_thread_inst_t *xlat_thread_instance_find(xlat_exp_t const *node)
  * This should be called directly after the modules_thread_instantiate() function.
  *
  * Memory will be freed automatically when the thread exits.
+ *
+ * @param[in] ctx	to bind instance tree lifetime to.  Must not be
+ *			shared between multiple threads.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
  */
-int xlat_thread_instantiate(void)
+int xlat_thread_instantiate(TALLOC_CTX *ctx)
 {
 	int ret;
 
 	if (!xlat_inst_tree) return 0;
 
 	if (!xlat_thread_inst_tree) {
-		MEM(xlat_thread_inst_tree = rbtree_talloc_create(NULL, _xlat_thread_inst_cmp,
+		MEM(xlat_thread_inst_tree = rbtree_talloc_create(ctx, _xlat_thread_inst_cmp,
 								 xlat_thread_inst_t, _xlat_thread_inst_free, 0));
-		fr_thread_local_set_destructor(xlat_thread_inst_tree,
-					       _xlat_thread_inst_tree_free, xlat_thread_inst_tree);
 	}
 
 	/*
 	 *	Walk the inst tree, creating thread specific instances.
 	 */
-	ret = rbtree_walk(xlat_inst_tree, RBTREE_PRE_ORDER, _xlat_thread_instantiate, NULL);
+	ret = rbtree_walk(xlat_inst_tree, RBTREE_PRE_ORDER, _xlat_thread_instantiate, xlat_thread_inst_tree);
 	if (ret < 0) {
-		_xlat_thread_inst_tree_free(xlat_thread_inst_tree);	/* Destroy the thread_inst_tree if instantiation fails */
+		TALLOC_FREE(xlat_thread_inst_tree);
 		return -1;
 	}
 

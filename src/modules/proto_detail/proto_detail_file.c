@@ -338,6 +338,7 @@ static int work_exists(proto_detail_file_t *inst, int fd)
 	if (fr_event_filter_insert(inst, inst->el, fd, FR_EVENT_FILTER_VNODE,
 				   &funcs, NULL, inst) < 0) {
 		PERROR("Failed adding work socket to event loop");
+		close(fd);
 		goto detach;
 	}
 
@@ -345,6 +346,7 @@ static int work_exists(proto_detail_file_t *inst, int fd)
 	 *	Remember this for later.
 	 */
 	inst->vnode_fd = fd;
+	fd = -1;
 
 	/*
 	 *	Yuck.
@@ -392,13 +394,11 @@ static int work_exists(proto_detail_file_t *inst, int fd)
 
 	if (!fr_schedule_socket_add(inst->parent->sc, listen)) {
 	error:
-		if (inst->vnode_fd >= 0) {
-			if (fr_event_fd_delete(inst->el, inst->vnode_fd, FR_EVENT_FILTER_VNODE) < 0) {
-				PERROR("Failed removing DELETE callback when opening work file");
-			}
-			close(inst->vnode_fd);
-			inst->vnode_fd = -1;
+		if (fr_event_fd_delete(inst->el, inst->vnode_fd, FR_EVENT_FILTER_VNODE) < 0) {
+			PERROR("Failed removing DELETE callback when opening work file");
 		}
+		close(inst->vnode_fd);
+		inst->vnode_fd = -1;
 
 		if (opened) {
 			(void) listen->app_io->close(listen->app_io_instance);
@@ -406,8 +406,6 @@ static int work_exists(proto_detail_file_t *inst, int fd)
 		}
 
 	detach:
-		close(fd);	/* our FD for the work file */
-
 		if (listen) (void) listen->app_io->detach(listen->app_io_instance);
 		talloc_free(listen);
 		return -1;

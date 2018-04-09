@@ -139,6 +139,16 @@ struct fr_schedule_t {
 	fr_schedule_network_t *sn;		//!< pointer to the (one) network thread
 };
 
+static _Thread_local int worker_id;		//!< Internal ID of the current worker thread.
+
+/** Return the worker id for the current thread
+ *
+ * @return worker ID
+ */
+int fr_schedule_worker_id(void)
+{
+	return worker_id;
+}
 
 /** Initialize and run the worker thread.
  *
@@ -147,11 +157,13 @@ struct fr_schedule_t {
  */
 static void *fr_schedule_worker_thread(void *arg)
 {
-	TALLOC_CTX *ctx;
-	fr_schedule_worker_t *sw = arg;
-	fr_schedule_t *sc = sw->sc;
-	fr_schedule_child_status_t status = FR_CHILD_FAIL;
+	TALLOC_CTX			*ctx;
+	fr_schedule_worker_t		*sw = talloc_get_type_abort(arg, fr_schedule_worker_t);
+	fr_schedule_t			*sc = sw->sc;
+	fr_schedule_child_status_t	status = FR_CHILD_FAIL;
 	char buffer[32];
+
+	worker_id = sw->id;		/* Store the current worker ID */
 
 	sw->ctx = ctx = talloc_init("worker %d", sw->id);
 	if (!ctx) {
@@ -181,7 +193,7 @@ static void *fr_schedule_worker_thread(void *arg)
 	 *	@todo make this a registry
 	 */
 	if (sc->worker_thread_instantiate &&
-	    (sc->worker_thread_instantiate(sc->worker_instantiate_ctx, fr_worker_el(sw->worker)) < 0)) {
+	    (sc->worker_thread_instantiate(sw->ctx, fr_worker_el(sw->worker), sc->worker_instantiate_ctx) < 0)) {
 		fr_log(sc->log, L_ERR, "Worker %d - Failed calling thread instantiate: %s", sw->id, fr_strerror());
 		goto fail;
 	}
@@ -235,7 +247,7 @@ fail:
 static void *fr_schedule_network_thread(void *arg)
 {
 	TALLOC_CTX			*ctx;
-	fr_schedule_network_t		*sn = arg;
+	fr_schedule_network_t		*sn = talloc_get_type_abort(arg, fr_schedule_network_t);
 	fr_schedule_t			*sc = sn->sc;
 	fr_schedule_child_status_t	status = FR_CHILD_FAIL;
 	fr_event_list_t			*el;
@@ -362,6 +374,7 @@ fr_schedule_t *fr_schedule_create(TALLOC_CTX *ctx, fr_event_list_t *el,
 		sc->single_network = fr_network_create(sc, el, sc->log, sc->lvl);
 		if (!sc->single_network) {
 			fr_log(sc->log, L_ERR, "Failed creating network: %s", fr_strerror());
+		st_fail:
 			talloc_free(sc);
 			return NULL;
 		}
@@ -369,18 +382,27 @@ fr_schedule_t *fr_schedule_create(TALLOC_CTX *ctx, fr_event_list_t *el,
 		sc->single_worker = fr_worker_create(sc, el, sc->log, sc->lvl);
 		if (!sc->single_worker) {
 			fr_log(sc->log, L_ERR, "Failed creating worker: %s", fr_strerror());
-			talloc_free(sc);
-			return NULL;
+			goto st_fail;
+		}
+
+		/*
+		 *	Parent thread-specific data from the single_worker
+		 */
+		if (sc->worker_thread_instantiate &&
+		    (sc->worker_thread_instantiate(sc->single_worker, el, sc->worker_instantiate_ctx) < 0)) {
+			fr_log(sc->log, L_ERR, "Failed calling thread instantiate: %s", fr_strerror());
+			goto st_fail;
 		}
 
 		(void) fr_network_worker_add(sc->single_network, sc->single_worker);
 		fr_log(sc->log, L_DBG, "Scheduler created in single-threaded mode");
+
 		return sc;
 	}
 
 #ifdef HAVE_PTHREAD_H
 	(void) pthread_attr_init(&attr);
-	(void) pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	(void) pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
 	/*
 	 *	Create the list which holds the workers.
@@ -564,15 +586,20 @@ int fr_schedule_destroy(fr_schedule_t *sc)
 		fr_dlist_remove(entry);
 
 		/*
-		 *	We can't free the context, because the event
-		 *	loop is allocated from it.  And the per-module
-		 *	thread instance data isn't freed until the
-		 *	thread is freed, which happens asynchronously.
-		 *	We can't catch that, so the best bet in the
-		 *	short term is to just leak this memory on exit.
+		 *	Ensure that the thread has exited before
+		 *	cleaning up the context.
+		 *
+		 *	This also ensures that the child threads have
+		 *	exited before the main thread cleans up the
+		 *	module instances.
 		 */
-//		sw = fr_ptr_to_type(fr_schedule_worker_t, entry, entry);
-//		talloc_free(sw->ctx);
+		sw = fr_ptr_to_type(fr_schedule_worker_t, entry, entry);
+		if (pthread_join(sw->pthread_id, NULL) != 0) {
+			fr_log(sc->log, L_ERR, "Failed joining worker %i: %s", sw->id, fr_syserror(errno));
+		} else {
+			fr_log(sc->log, L_INFO, "Worker %i exited", sw->id);
+		}
+		talloc_free(sw->ctx);
 	}
 
 	TALLOC_FREE(sc->sn->ctx);

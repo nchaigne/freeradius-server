@@ -49,6 +49,10 @@ typedef struct {
 } fr_log_buffer_t;
 
 fr_thread_local_setup(fr_log_buffer_t *, fr_strerror_buffer)	/* macro */
+static _Thread_local bool logging_stop;	//!< Due to ordering issues we may get errors being
+					///< logged from within other thread local destructors
+					///< which cause a crash on exit if the logging buffer
+					///< has already been freed.
 
 /*
  *	Explicitly cleanup the memory allocated to the error buffer,
@@ -56,7 +60,15 @@ fr_thread_local_setup(fr_log_buffer_t *, fr_strerror_buffer)	/* macro */
  */
 static void _fr_logging_free(void *arg)
 {
+	/*
+	 *	Free arg instead of thread local storage
+	 *	as address sanitizer does a better job
+	 *	of tracking and doesn't report a leak.
+	 */
 	talloc_free(arg);
+	fr_strerror_buffer = NULL;
+
+	logging_stop = true;
 }
 
 /** Reset cursor state
@@ -76,6 +88,8 @@ static inline void fr_strerror_clear(fr_log_buffer_t *buffer)
 static inline fr_log_buffer_t *fr_strerror_init(void)
 {
 	fr_log_buffer_t *buffer;
+
+	if (logging_stop) return NULL;	/* No more logging */
 
 	buffer = fr_strerror_buffer;
 	if (!buffer) {
@@ -309,7 +323,8 @@ void fr_perror(char const *fmt, ...)
  */
 void fr_strerror_free(void)
 {
-	talloc_free(fr_strerror_buffer);
+	TALLOC_FREE(fr_strerror_buffer);
+	logging_stop = true;
 }
 
 #ifdef TESTING_STRERROR

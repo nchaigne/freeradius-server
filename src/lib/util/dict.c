@@ -2982,7 +2982,7 @@ fr_dict_t *fr_dict_by_da(fr_dict_attr_t const *da)
  *
  * @note This is O(n) and will only return the first instance of the dictionary.
  *
- * @param[out] found	the attribute that was resolved from the name.
+ * @param[out] found	the attribute that was resolved from the name. May be NULL.
  * @param[in] name	the name of the attribute.
  * @return
  *	- the dictionary the attribute was found in.
@@ -2998,7 +2998,7 @@ fr_dict_t *fr_dict_by_attr_name(fr_dict_attr_t const **found, char const *name)
 				};
 	int			ret;
 
-	*found = NULL;
+	if (found) *found = NULL;
 
 	if (!name || !*name) return NULL;
 
@@ -3090,6 +3090,8 @@ fr_dict_attr_t const *fr_dict_vendor_attr_by_da(fr_dict_attr_t const *da)
 	while (da_p->parent) {
 		if (da_p->type == FR_TYPE_VENDOR) break;
 		da_p = da_p->parent;
+
+		if (!da_p) return NULL;
 	}
 	if (da_p->type != FR_TYPE_VENDOR) return NULL;
 
@@ -3289,7 +3291,7 @@ fr_dict_attr_t const *fr_dict_attr_by_type(fr_dict_attr_t const *da, fr_type_t t
  *	- The child attribute on success.
  *	- NULL if the child attribute does not exist.
  */
-inline fr_dict_attr_t const *fr_dict_attr_child_by_da(fr_dict_attr_t const *parent, fr_dict_attr_t const *child)
+fr_dict_attr_t const *fr_dict_attr_child_by_da(fr_dict_attr_t const *parent, fr_dict_attr_t const *child)
 {
 	fr_dict_attr_t const *bin;
 

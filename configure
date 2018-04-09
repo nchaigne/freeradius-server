@@ -2533,6 +2533,9 @@ _ACEOF
 
 
 
+unset ASAN_OPTIONS
+unset LSAN_OPTIONS
+
 # Extract the first word of "git", so it can be a program name with args.
 set dummy git; ac_word=$2
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
@@ -7517,6 +7520,7 @@ for ac_header in \
   prot.h \
   pwd.h \
   resource.h \
+  sanitizer/common_interface_defs.h \
   semaphore.h \
   sia.h \
   siad.h \
@@ -12580,7 +12584,7 @@ else
 
 
     CFLAGS_SAVED=$CFLAGS
-    CFLAGS="$CFLAGS -Werror -Weverything -Wno-unused-macros -Wno-unreachable-code-return"
+    CFLAGS="$CFLAGS -Werror -Weverything -Wno-reserved-id-macro -Wno-unused-macros -Wno-unreachable-code-return"
 
     ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -12619,7 +12623,24 @@ fi
 $as_echo "$ax_cv_cc_weverything_flag" >&6; }
 
   if test "x$ax_cv_cc_weverything_flag" = "xyes"; then
-    devcflags="$devflags -W -Weverything -Wformat=2 -Wno-disabled-macro-expansion -Wno-missing-field-initializers -Wno-date-time -Wno-padded -Wno-gnu-zero-variadic-macro-arguments -Wno-shorten-64-to-32 -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-gnu-statement-expression -Wno-extended-offsetof -Wno-cast-align -Wno-documentation-unknown-command -Wno-covered-switch-default -Wno-packed -DWITH_VERIFY_PTR=1"
+    devcflags="$devflags -W -Weverything -Wformat=2 -DWITH_VERIFY_PTR=1" \
+    	-Wno-disabled-macro-expansion \
+    	-Wno-missing-field-initializers \
+    	-Wno-date-time \
+    	-Wno-padded \
+    	-Wno-gnu-zero-variadic-macro-arguments \
+    	-Wno-shorten-64-to-32 \
+    	-Wno-sign-conversion \
+    	-Wno-conversion \
+    	-Wno-switch-enum \
+    	-Wno-gnu-statement-expression \
+    	-Wno-extended-offsetof \
+    	-Wno-cast-align \
+    	-Wno-documentation-unknown-command \
+    	-Wno-covered-switch-default \
+    	-Wno-packed \
+    	-Wno-reserved-id-macro \
+    	-Wno-format-pedantic
   else
     if test "x$GCC" = "xyes"; then
       devcflags="$devflags -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs -W -Wredundant-decls -Wundef -Wformat-y2k -Wno-missing-field-initializers -Wno-format-extra-args -Wno-format-zero-length -Wno-cast-align -Wformat-nonliteral -Wformat-security -Wformat=2 -DWITH_VERIFY_PTR=1"
