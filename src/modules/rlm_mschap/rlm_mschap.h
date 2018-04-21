@@ -1,8 +1,5 @@
+#pragma once
 /* @copyright 2006-2015 The FreeRADIUS server project */
-
-#ifndef _RLM_MSCHAP_H
-#define _RLM_MSCHAP_H
-
 RCSIDH(rlm_mschap_h, "$Id$")
 
 #include "config.h"
@@ -22,32 +19,38 @@ typedef enum {
 #endif
 } MSCHAP_AUTH_METHOD;
 
-typedef struct rlm_mschap_t {
+extern fr_dict_attr_t const *attr_ms_chap_user_name;
+extern fr_dict_attr_t const *attr_ms_chap_challenge;
+extern fr_dict_attr_t const *attr_ms_chap_response;
+extern fr_dict_attr_t const *attr_ms_chap2_response;
+extern fr_dict_attr_t const *attr_ms_chap2_success;
+
+typedef struct {
+	char const		*name;
+	fr_dict_enum_t		*auth_type;
+
 	bool			use_mppe;
 	bool			require_encryption;
 	bool			require_strong;
 	bool			with_ntdomain_hack;	/* this should be in another module */
-	char const		*xlat_name;
+
 	char const		*ntlm_auth;
 	uint32_t		ntlm_auth_timeout;
 	char const		*ntlm_cpw;
 	char const		*ntlm_cpw_username;
 	char const		*ntlm_cpw_domain;
 	char const		*local_cpw;
-	char const		*auth_type;
+
 	bool			allow_retry;
 	char const		*retry_msg;
 	MSCHAP_AUTH_METHOD	method;
 	vp_tmpl_t		*wb_username;
 	vp_tmpl_t		*wb_domain;
 #ifdef WITH_AUTH_WINBIND
-	fr_pool_t	*wb_pool;
+	fr_pool_t		*wb_pool;
 	bool			wb_retry_with_normalised_username;
 #endif
 #ifdef __APPLE__
 	bool			open_directory;
 #endif
 } rlm_mschap_t;
-
-#endif
-

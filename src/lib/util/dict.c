@@ -1224,7 +1224,7 @@ static fr_dict_attr_t *dict_attr_alloc(TALLOC_CTX *ctx,
 	}
 
 	dict_attr_init(n, parent, attr, type, flags);
-	VERIFY_DA(n);
+	DA_VERIFY(n);
 
 	return n;
 }
@@ -1245,7 +1245,7 @@ static fr_dict_attr_t *dict_attr_acopy(TALLOC_CTX *ctx, fr_dict_attr_t const *in
 	if (!n) return NULL;
 
 	dict_attr_init(n, in->parent, in->attr, in->type, &in->flags);
-	VERIFY_DA(n);
+	DA_VERIFY(n);
 
 	return n;
 }
@@ -1434,7 +1434,7 @@ static inline int dict_attr_child_add(fr_dict_attr_t *parent, fr_dict_attr_t *ch
 	child->parent = parent;
 	child->depth = parent->depth + 1;
 
-	VERIFY_DA(child);
+	DA_VERIFY(child);
 
 	/*
 	 *	We only allocate the pointer array *if* the parent has children.
@@ -2430,6 +2430,7 @@ ssize_t fr_dict_unknown_afrom_oid_str(TALLOC_CTX *ctx, fr_dict_attr_t **out,
 	 *	Invert the talloc hierarchy, so that if the unknown
 	 *	attribute is freed, any unknown parents are also freed.
 	 */
+	talloc_steal(ctx, n);
 	for (our_parent = n->parent, our_ctx = n;
 	     our_parent && our_parent->flags.is_unknown;
 	     our_parent = our_parent->parent) {
@@ -3085,7 +3086,7 @@ fr_dict_attr_t const *fr_dict_vendor_attr_by_da(fr_dict_attr_t const *da)
 {
 	fr_dict_attr_t const *da_p = da;
 
-	VERIFY_DA(da);
+	DA_VERIFY(da);
 
 	while (da_p->parent) {
 		if (da_p->type == FR_TYPE_VENDOR) break;
@@ -3295,7 +3296,7 @@ fr_dict_attr_t const *fr_dict_attr_child_by_da(fr_dict_attr_t const *parent, fr_
 {
 	fr_dict_attr_t const *bin;
 
-	VERIFY_DA(parent);
+	DA_VERIFY(parent);
 
 	if (!parent->children) return NULL;
 
@@ -3338,7 +3339,7 @@ inline fr_dict_attr_t const *fr_dict_attr_child_by_num(fr_dict_attr_t const *par
 {
 	fr_dict_attr_t const *bin;
 
-	VERIFY_DA(parent);
+	DA_VERIFY(parent);
 
 	if (!parent->children) return NULL;
 
@@ -3619,7 +3620,7 @@ static int dict_root_set(fr_dict_t *dict, char const *name, unsigned int proto_n
 	if (!dict->root) return -1;
 
 	dict_attr_init(dict->root, NULL, proto_number, FR_TYPE_TLV, &flags);
-	VERIFY_DA(dict->root);
+	DA_VERIFY(dict->root);
 
 	return 0;
 }
@@ -4433,10 +4434,11 @@ static int _dict_from_file(dict_from_file_ctx_t *ctx,
 	if ((fp = fopen(fn, "r")) == NULL) {
 		if (!src_file) {
 			fr_strerror_printf_push("%s: Couldn't open dictionary '%s': %s",
-					   "Error reading dictionary", fn, fr_syserror(errno));
+						"Error reading dictionary", fn, fr_syserror(errno));
 		} else {
 			fr_strerror_printf_push("%s: %s[%d]: Couldn't open dictionary '%s': %s",
-					   "Error reading dictionary", src_file, src_line, fn, fr_syserror(errno));
+						"Error reading dictionary", src_file, src_line, fn,
+						fr_syserror(errno));
 		}
 		return -2;
 	}

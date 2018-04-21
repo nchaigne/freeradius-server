@@ -1,3 +1,4 @@
+#pragma once
 /*
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -13,12 +14,6 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
-#ifndef _FR_APPLICATION_H
-#define _FR_APPLICATION_H
-
-#include <freeradius-devel/cf_util.h>
-#include <freeradius-devel/dl.h>
-#include <freeradius-devel/io/io.h>
 
 /**
  * $Id$
@@ -28,6 +23,9 @@
  *
  * @copyright 2017 The FreeRADIUS project
  */
+#include <freeradius-devel/cf_util.h>
+#include <freeradius-devel/dl.h>
+#include <freeradius-devel/io/io.h>
 
 /*
  *	src/lib/io/schedule.h
@@ -113,5 +111,5 @@ typedef struct fr_app_io_t {
 	fr_io_signal_t			error;		//!< There was an error on the socket.
 	fr_io_open_t			close;		//!< Close the transport.
 	fr_io_nak_t			nak;		//!< Function to send a NAK.
+	void				*private;	//!< any private APIs it needs to export.
 } fr_app_io_t;
-#endif

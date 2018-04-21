@@ -450,6 +450,8 @@ static const CONF_PARSER client_config[] = {
 	{ FR_CONF_OFFSET("virtual_server", FR_TYPE_STRING, RADCLIENT, server) },
 	{ FR_CONF_OFFSET("response_window", FR_TYPE_TIMEVAL, RADCLIENT, response_window) },
 
+	{ FR_CONF_OFFSET("track_connections", FR_TYPE_BOOL, RADCLIENT, use_connected) },
+
 #ifdef WITH_TCP
 	{ FR_CONF_POINTER("proto", FR_TYPE_STRING, &hs_proto) },
 	{ FR_CONF_POINTER("limit", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) limit_config },
@@ -782,7 +784,8 @@ RADCLIENT *client_afrom_cs(TALLOC_CTX *ctx, CONF_SECTION *cs, CONF_SECTION *serv
 			}
 			break;
 		default:
-			rad_assert(0);
+			cf_log_err(cs, "ipaddr was not defined");
+			goto error;
 		}
 #else
 		WARN("Server not built with udpfromto, ignoring client src_ipaddr");
@@ -901,15 +904,16 @@ RADCLIENT *client_afrom_request(TALLOC_CTX *ctx, REQUEST *request)
 {
 	static int	cnt;
 	CONF_SECTION	*cs;
-	char		buffer[128];
+	char		src_buf[128], buffer[256];
 	vp_cursor_t	cursor;
 	VALUE_PAIR	*vp;
 	RADCLIENT	*c;
-	fr_ipaddr_t	ipaddr;
 
 	if (!request) return NULL;
 
-	snprintf(buffer, sizeof(buffer), "dynamic%i", cnt++);
+	fr_value_box_snprint(src_buf, sizeof(src_buf), fr_box_ipaddr(request->packet->src_ipaddr), 0);
+
+	snprintf(buffer, sizeof(buffer), "dynamic_%i_%s", cnt++, src_buf);
 
 	cs = cf_section_alloc(ctx, NULL, "client", buffer);
 
@@ -926,11 +930,6 @@ RADCLIENT *client_afrom_request(TALLOC_CTX *ctx, REQUEST *request)
 		char const	*attr;
 
 		if (!fr_dict_attr_is_top_level(vp->da)) continue;
-
-		if ((vp->da->attr < FR_FREERADIUS_CLIENT_IP_ADDRESS) ||
-		    (vp->da->attr > FR_FREERADIUS_CLIENT_NAS_TYPE)) {
-			continue;
-		}
 
 		switch (vp->da->attr) {
 		case FR_FREERADIUS_CLIENT_IP_ADDRESS:
@@ -968,6 +967,15 @@ RADCLIENT *client_afrom_request(TALLOC_CTX *ctx, REQUEST *request)
 			value = vp->vp_strvalue;
 			break;
 
+		case FR_FREERADIUS_CLIENT_TRACK_CONNECTIONS:
+			attr = "track_connections";
+			if (vp->vp_bool) {
+				value = "true";
+			} else {
+				value = "false";
+			}
+			break;
+
 		default:
 			RERROR("Ignoring attribute %s", vp->da->name);
 			continue;
@@ -994,33 +1002,6 @@ RADCLIENT *client_afrom_request(TALLOC_CTX *ctx, REQUEST *request)
 	error:
 		talloc_free(cs);
 		return NULL;
-	}
-
-	/*
-	 *	Do some basic sanity checks.
-	 */
-	if (request->client->network.af != c->ipaddr.af) {
-		fr_strerror_printf("Client IP address %pV IP version does not match the source network %pV of the packet.",
-			fr_box_ipaddr(c->ipaddr), fr_box_ipaddr(request->client->network));
-		goto error;
-	}
-
-	/*
-	 *	Network prefix is more restrictive than the one given
-	 *	by the client... that's bad.
-	 */
-	if (request->client->network.prefix > c->ipaddr.prefix) {
-		fr_strerror_printf("Client IP address %pV is not within the prefix with the defined network %pV",
-				   fr_box_ipaddr(c->ipaddr), fr_box_ipaddr(request->client->network));
-		goto error;
-	}
-
-	ipaddr = c->ipaddr;
-	fr_ipaddr_mask(&ipaddr, request->client->network.prefix);
-	if (fr_ipaddr_cmp(&ipaddr, &request->client->network) != 0) {
-		fr_strerror_printf("Client IP address %pV is not within the defined network %pV.",
-				   fr_box_ipaddr(c->ipaddr), fr_box_ipaddr(request->client->network));
-		goto error;
 	}
 
 	return c;
@@ -1115,6 +1096,7 @@ RADCLIENT *client_clone(TALLOC_CTX *ctx, RADCLIENT const *parent)
 	COPY_FIELD(server_cs);
 	COPY_FIELD(cs);
 	COPY_FIELD(proto);
+	COPY_FIELD(use_connected);
 
 #ifdef WITH_TLS
 	COPY_FIELD(tls_required);

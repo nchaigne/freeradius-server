@@ -1,3 +1,4 @@
+#pragma once
 /*
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -13,8 +14,7 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
-#ifndef _FR_PAIR_H
-#define _FR_PAIR_H
+
 /**
  * $Id$
  *
@@ -224,6 +224,9 @@ void		fr_pair_delete_by_num(VALUE_PAIR **head, unsigned int vendor, unsigned int
 void		fr_pair_delete_by_child_num(VALUE_PAIR **head, fr_dict_attr_t const *parent,
 					    unsigned int attr, int8_t tag);
 
+VALUE_PAIR	*fr_pair_add_by_da(TALLOC_CTX *ctx, VALUE_PAIR **list,
+				   fr_dict_attr_t const *da, int8_t tag);
+
 VALUE_PAIR	*fr_pair_update_by_da(TALLOC_CTX *ctx, VALUE_PAIR **list,
 				      fr_dict_attr_t const *da, int8_t tag,
 				      bool skip_if_exists);
@@ -295,4 +298,3 @@ FR_TOKEN 	fr_pair_raw_from_str(char const **ptr, VALUE_PAIR_RAW *raw);
 #ifdef __cplusplus
 }
 #endif
-#endif /* _PAIR_H */

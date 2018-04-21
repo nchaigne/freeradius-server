@@ -86,6 +86,7 @@ HEADER		:= "/* AUTO_GENERATED FILE.  DO NOT EDIT */"
 src/include/attributes.h: share/dictionary.freeradius.internal
 	${Q}$(ECHO) HEADER $@
 	${Q}echo ${HEADER} > $@
+	${Q}echo "#pragma once" >> $@
 	${Q}grep ^ATTRIBUTE $<  | awk '{print "FR_"$$2 " " $$3 }' | ${NORMALIZE}  >> $@
 	${Q}echo " " >> $@
 	${Q}grep -- 'Auth-Type' $< | grep ^VALUE | awk '{print "FR_"$$2 "_" $$3 " " $$4 }' | ${NORMALIZE}  >> $@
@@ -93,6 +94,7 @@ src/include/attributes.h: share/dictionary.freeradius.internal
 src/include/%.h: share/dictionary.% share/dictionary.vqp share/dictionary.freeradius.snmp
 	${Q}$(ECHO) HEADER $@
 	${Q}echo ${HEADER} > $@
+	${Q}echo "#pragma once" >> $@
 	${Q}grep ^ATTRIBUTE $<  | awk '{print "FR_"$$2 " " $$3 }' | ${NORMALIZE} >> $@
 	${Q}grep ^VALUE $<  | awk '{print "FR_"$$2"_VALUE_"$$3 " " $$4 }' | ${NORMALIZE} >> $@
 
@@ -106,12 +108,10 @@ src/include/%.h: share/dictionary.% share/dictionary.vqp share/dictionary.freera
 #
 src/include/features.h: src/include/features-h src/include/autoconf.h
 	${Q}$(ECHO) HEADER $@
-	${Q}echo "#ifndef _FR_FEATURES_H" > $@
-	${Q}echo "#define _FR_FEATURES_H" >> $@
+	${Q}echo "#pragma once" > $@
 	${Q}cat $< >> $@
 	${Q}grep "^#define[ ]*WITH_" src/include/autoconf.h >> $@
 	${Q}grep "^#define[ ]*RADIUSD_VERSION" src/include/autoconf.h >> $@
-	${Q}echo "#endif /* _FR_FEATURES_H */" >> $@
 #
 #  Use the SED script we built earlier to make permanent substitutions
 #  of definitions in missing-h to build missing.h

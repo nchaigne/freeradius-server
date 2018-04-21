@@ -113,7 +113,7 @@ pid_t radius_start_program(char const *cmd, REQUEST *request, bool exec_wait,
 	memcpy(&argv_p, &argv_start, sizeof(argv_p));
 	argc = rad_expand_xlat(request, cmd, MAX_ARGV, argv_p, true, sizeof(argv_buf), argv_buf);
 	if (argc <= 0) {
-		ERROR("Invalid command '%s'", cmd);
+		ROPTIONAL(RPEDEBUG, PERROR, "Invalid command '%s'", cmd);
 		return -1;
 	}
 

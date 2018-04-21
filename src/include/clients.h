@@ -1,3 +1,4 @@
+#pragma once
 /*
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -13,8 +14,7 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
-#ifndef _FR_CLIENTS_H
-#define _FR_CLIENTS_H
+
 /**
  * $Id$
  *
@@ -48,7 +48,7 @@ typedef struct radclient {
 	bool			message_authenticator;	//!< Require RADIUS message authenticator in requests.
 	bool			dynamic;		//!< Whether the client was dynamically defined.
 	bool			active;			//!< for dynamic clients
-	bool			negative;		//!< negative cache entry
+	bool			use_connected;		//!< do we use connected sockets for this client
 
 #ifdef WITH_TLS
 	bool			tls_required;		//!< whether TLS encryption is required.
@@ -79,16 +79,6 @@ typedef struct radclient {
 	int			proto;			//!< Protocol number.
 #ifdef WITH_TCP
 	fr_socket_limit_t	limit;			//!< Connections per client (TCP clients only).
-#endif
-
-#ifdef WITH_DYNAMIC_CLIENTS
-	fr_dlist_t		packets;		//!< list of pending packets
-	uint32_t		outstanding;		//!< number of requests outstanding
-	uint32_t		received;		//!< number of requests received but not yet processed
-	time_t			created;		//!< When the client was created.
-	fr_ipaddr_t		network;		//!< encapsulating network
-	void			*ctx;			//!< for timeouts
-	fr_event_timer_t const	*ev;			//!< cleanup timer for dynamic clients
 #endif
 } RADCLIENT;
 
@@ -161,4 +151,3 @@ RADCLIENT	*client_clone(TALLOC_CTX *ctx, RADCLIENT const *parent);
 #ifdef __cplusplus
 }
 #endif
-#endif	/* _FR_CLIENTS_H */

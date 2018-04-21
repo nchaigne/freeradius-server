@@ -100,7 +100,10 @@ static int rediswho_command(rlm_rediswho_t const *inst, REQUEST *request, char c
 	if (!fmt || !*fmt) return 0;
 
 	argc = rad_expand_xlat(request, fmt, MAX_REDIS_ARGS, argv, false, sizeof(argv_buf), argv_buf);
- 	if (argc < 0) return -1;
+	if (argc < 0) {
+		RPEDEBUG("Invalid command: %s", fmt);
+		return -1;
+	}
 
 	/*
 	 *	If we've got multiple arguments, the second one is usually the key.

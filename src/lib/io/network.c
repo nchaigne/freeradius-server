@@ -609,6 +609,18 @@ static void fr_network_write(UNUSED fr_event_list_t *el, UNUSED int sockfd, UNUS
 				return;
 			}
 
+			/*
+			 *	As a special hack, check for something
+			 *	that will never be returned from a
+			 *	real write() routine.  Which then
+			 *	signals to us that we have to close
+			 *	the socket, but NOT complain about it.
+			 */
+			if (errno == ECONNREFUSED) {
+				fr_network_socket_dead(nr, s);
+				return;
+			}
+
 			PERROR("Failed writing to socket %d", s->fd);
 			fr_network_socket_dead(nr, s);
 			return;
@@ -729,8 +741,6 @@ static void fr_network_socket_callback(void *ctx, void const *data, size_t data_
 
 	app_io = s->listen->app_io;
 
-	if (app_io->event_list_set) app_io->event_list_set(s->listen->app_io_instance, nr->el, nr);
-
 	rad_assert(app_io->fd);
 	s->fd = app_io->fd(s->listen->app_io_instance);
 	s->filter = FR_EVENT_FILTER_IO;
@@ -744,6 +754,8 @@ static void fr_network_socket_callback(void *ctx, void const *data, size_t data_
 		talloc_free(s);
 		return;
 	}
+
+	if (app_io->event_list_set) app_io->event_list_set(s->listen->app_io_instance, nr->el, nr);
 
 	(void) rbtree_insert(nr->sockets, s);
 

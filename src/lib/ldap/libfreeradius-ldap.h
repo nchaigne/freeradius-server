@@ -1,3 +1,4 @@
+#pragma once
 /**
  * $Id$
  * @file lib/ldap/libfreeradius-ldap.h
@@ -12,9 +13,6 @@
  * @copyright 2017 The FreeRADIUS Server Project.
  * @copyright 2017 Arran Cudbard-Bell <a.cudbardb@freeradius.org>
  */
-#ifndef LIBFREERADIUS_LDAP_H
-#define	LIBFREERADIUS_LDAP_H
-
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/connection.h>
 #include <lber.h>
@@ -195,6 +193,8 @@ typedef struct {
 	char const		*admin_password;	//!< Password used in administrative bind.
 
 	fr_ldap_sasl_t		admin_sasl;		//!< SASL parameters used when binding as the admin.
+
+	const char		*sasl_secprops;		//!< SASL Security Properties to set.
 
 	int			dereference;		//!< libldap value specifying dereferencing behaviour.
 	char const		*dereference_str;	//!< When to dereference (never, searching, finding, always)
@@ -549,6 +549,3 @@ uint8_t		*fr_ldap_berval_to_bin(TALLOC_CTX *ctx, struct berval const *in);
 
 int		fr_ldap_parse_url_extensions(LDAPControl **sss, REQUEST *request,
 					     fr_ldap_connection_t *conn, char **extensions);
-
-
-#endif

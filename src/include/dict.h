@@ -1,3 +1,4 @@
+#pragma once
 /*
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -13,8 +14,7 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
-#ifndef _FR_DICT_H
-#define _FR_DICT_H
+
 /**
  * $Id$
  *
@@ -184,12 +184,6 @@ typedef struct {
 /** Maximum dictionary attribute size
  */
 #define FR_DICT_ATTR_SIZE		(sizeof(fr_dict_attr_t) + FR_DICT_ATTR_MAX_NAME_LEN)
-
-#ifdef WITH_VERIFY_PTR
-#  define VERIFY_DA(_x)		fr_dict_verify(__FILE__,  __LINE__, _x)
-#else
-#  define VERIFY_DA(_x)		fr_cond_assert(_x)
-#endif
 
 /** Characters that are allowed in dictionary attribute names
  *
@@ -377,4 +371,3 @@ void			fr_dict_verify(char const *file, int line, fr_dict_attr_t const *da);
 #ifdef __cplusplus
 }
 #endif
-#endif /* _FR_DICT_H */

@@ -1,3 +1,4 @@
+#pragma once
 /*
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -13,8 +14,7 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
-#ifndef _FR_HEAP_H
-#define _FR_HEAP_H
+
 /**
  * $Id$
  *
@@ -32,6 +32,10 @@ RCSIDH(heap_h, "$Id$")
 extern "C" {
 #endif
 
+/*
+ *  Return negative numbers to put 'a' at the top of the heap.
+ *  Return positive numbers to put 'b' at the top of the heap.
+ */
 typedef int (*fr_heap_cmp_t)(void const *a, void const *b);
 
 typedef struct fr_heap_t fr_heap_t;
@@ -72,4 +76,3 @@ uint32_t	fr_heap_num_elements(fr_heap_t *hp);
 #ifdef __cplusplus
 }
 #endif
-#endif /* _FR_HEAP_H*/

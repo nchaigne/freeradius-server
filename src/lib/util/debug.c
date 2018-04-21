@@ -116,14 +116,31 @@ static TALLOC_CTX *talloc_autofree_ctx;
 #    include <sys/capability.h>
 #  endif
 
-#ifdef HAVE_SANITIZER_COMMON_INTERFACE_DEFS_H
-#  include <sanitizer/common_interface_defs.h>
+#ifdef HAVE_SANITIZER_LSAN_INTERFACE_H
+#  include <sanitizer/lsan_interface.h>
 #endif
 
-#ifdef HAVE_SANITIZER_COMMON_INTERFACE_DEFS_H
+#ifdef HAVE_SANITIZER_LSAN_INTERFACE_H
 static int lsan_test_pipe[2] = {-1, -1};
 static int lsan_test_pid = -1;
 static int lsan_state = INT_MAX;
+
+DIAG_OFF(missing-prototypes)
+/** Callback for LSAN - do not rename
+ *
+ */
+const char CC_HINT(used) *__lsan_default_suppressions(void)
+{
+	return
+#ifdef __APPLE__
+		"leak:*gmtsub*\n"
+		"leak:tzsetwall_basic\n"
+		"leak:ImageLoaderMachO::doImageInit\n"
+#else
+		""
+#endif
+		;
+}
 
 /** Callback for LSAN - do not rename
  *
@@ -142,6 +159,7 @@ int CC_HINT(used) __lsan_is_turned_off(void)
 	close(lsan_test_pipe[1]);
 	return 0;
 }
+DIAG_ON(missing-prototypes)
 
 /** Determine if we're running under LSAN (Leak Sanitizer)
  *
