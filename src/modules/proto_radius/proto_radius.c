@@ -27,8 +27,6 @@
 #include <freeradius-devel/io/listen.h>
 #include <freeradius-devel/modules.h>
 #include <freeradius-devel/unlang.h>
-#include <freeradius-devel/io/schedule.h>
-#include <freeradius-devel/io/application.h>
 #include <freeradius-devel/rad_assert.h>
 #include "proto_radius.h"
 
@@ -37,13 +35,13 @@ static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, CONF_PARSER con
 static int transport_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, CONF_PARSER const *rule);
 
 static CONF_PARSER const limit_config[] = {
-	{ FR_CONF_OFFSET("cleanup_delay", FR_TYPE_TIMEVAL, proto_radius_t, cleanup_delay), .dflt = "5.0" } ,
-	{ FR_CONF_OFFSET("idle_timeout", FR_TYPE_TIMEVAL, proto_radius_t, idle_timeout), .dflt = "30.0" } ,
-	{ FR_CONF_OFFSET("nak_lifetime", FR_TYPE_TIMEVAL, proto_radius_t, nak_lifetime), .dflt = "30.0" } ,
+	{ FR_CONF_OFFSET("cleanup_delay", FR_TYPE_TIMEVAL, proto_radius_t, io.cleanup_delay), .dflt = "5.0" } ,
+	{ FR_CONF_OFFSET("idle_timeout", FR_TYPE_TIMEVAL, proto_radius_t, io.idle_timeout), .dflt = "30.0" } ,
+	{ FR_CONF_OFFSET("nak_lifetime", FR_TYPE_TIMEVAL, proto_radius_t, io.nak_lifetime), .dflt = "30.0" } ,
 
-	{ FR_CONF_OFFSET("max_connections", FR_TYPE_UINT32, proto_radius_t, max_connections), .dflt = "1024" } ,
-	{ FR_CONF_OFFSET("max_clients", FR_TYPE_UINT32, proto_radius_t, max_clients), .dflt = "256" } ,
-	{ FR_CONF_OFFSET("max_pending_packets", FR_TYPE_UINT32, proto_radius_t, max_pending_packets), .dflt = "256" } ,
+	{ FR_CONF_OFFSET("max_connections", FR_TYPE_UINT32, proto_radius_t, io.max_connections), .dflt = "1024" } ,
+	{ FR_CONF_OFFSET("max_clients", FR_TYPE_UINT32, proto_radius_t, io.max_clients), .dflt = "256" } ,
+	{ FR_CONF_OFFSET("max_pending_packets", FR_TYPE_UINT32, proto_radius_t, io.max_pending_packets), .dflt = "256" } ,
 
 	/*
 	 *	For performance tweaking.  NOT for normal humans.
@@ -60,7 +58,7 @@ static CONF_PARSER const limit_config[] = {
 static CONF_PARSER const proto_radius_config[] = {
 	{ FR_CONF_OFFSET("type", FR_TYPE_VOID | FR_TYPE_MULTI | FR_TYPE_NOT_EMPTY, proto_radius_t,
 			  type_submodule), .func = type_parse },
-	{ FR_CONF_OFFSET("transport", FR_TYPE_VOID, proto_radius_t, io_submodule),
+	{ FR_CONF_OFFSET("transport", FR_TYPE_VOID, proto_radius_t, io.submodule),
 	  .func = transport_parse },
 
 	/*
@@ -167,7 +165,7 @@ static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PAR
 	cf_data_add(ci, type_enum, NULL, false);
 
 	code = type_enum->value->vb_uint32;
-	if (code > FR_CODE_MAX) {
+	if (code >= FR_MAX_PACKET_CODE) {
 	invalid_type:
 		cf_log_err(ci, "Unsupported 'type = %s'", type_str);
 		return -1;
@@ -249,7 +247,7 @@ static int transport_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CON
 	 *	necessary.
 	 */
 	inst = talloc_get_type_abort(parent_inst->data, proto_radius_t);
-	inst->transport = name;
+	inst->io.transport = name;
 
 	return dl_instance(ctx, out, transport_cs, parent_inst, name, DL_TYPE_SUBMODULE);
 }
@@ -260,8 +258,8 @@ static int transport_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CON
 static int mod_decode(void const *instance, REQUEST *request, uint8_t *const data, size_t data_len)
 {
 	proto_radius_t const *inst = talloc_get_type_abort_const(instance, proto_radius_t);
-	proto_radius_track_t const *track = talloc_get_type_abort_const(request->async->packet_ctx, proto_radius_track_t);
-	proto_radius_address_t *address = track->address;
+	fr_io_track_t const *track = talloc_get_type_abort_const(request->async->packet_ctx, fr_io_track_t);
+	fr_io_address_t *address = track->address;
 	RADCLIENT const *client;
 
 	rad_assert(data[0] < FR_MAX_PACKET_CODE);
@@ -353,29 +351,21 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 				}
 			}
 		}
-
-		/*
-		 *	If this packet is trying to define a connected
-		 *	socket, tell the dynamic client code.
-		 */
-		if (track->client->connected) {
-			(void) pair_make_request("FreeRADIUS-Client-Connected", "true", T_OP_EQ);
-		}
 	}
 
-	if (!inst->app_io->decode) return 0;
+	if (!inst->io.app_io->decode) return 0;
 
 	/*
 	 *	Let the app_io do anything it needs to do.
 	 */
-	return inst->app_io->decode(inst->app_io_instance, request, data, data_len);
+	return inst->io.app_io->decode(inst->io.app_io_instance, request, data, data_len);
 }
 
 static ssize_t mod_encode(void const *instance, REQUEST *request, uint8_t *buffer, size_t buffer_len)
 {
 	proto_radius_t const *inst = talloc_get_type_abort_const(instance, proto_radius_t);
-	proto_radius_track_t const *track = talloc_get_type_abort_const(request->async->packet_ctx, proto_radius_track_t);
-	proto_radius_address_t *address = track->address;
+	fr_io_track_t const *track = talloc_get_type_abort_const(request->async->packet_ctx, fr_io_track_t);
+	fr_io_address_t *address = track->address;
 	ssize_t data_len;
 	RADCLIENT const *client;
 
@@ -432,8 +422,8 @@ static ssize_t mod_encode(void const *instance, REQUEST *request, uint8_t *buffe
 	 *	If the app_io encodes the packet, then we don't need
 	 *	to do that.
 	 */
-	if (inst->app_io->encode) {
-		data_len = inst->app_io->encode(inst->app_io_instance, request, buffer, buffer_len);
+	if (inst->io.app_io->encode) {
+		data_len = inst->io.app_io->encode(inst->io.app_io_instance, request, buffer, buffer_len);
 		if (data_len > 0) return data_len;
 	}
 
@@ -475,17 +465,17 @@ static void mod_process_set(void const *instance, REQUEST *request)
 {
 	proto_radius_t const *inst = talloc_get_type_abort_const(instance, proto_radius_t);
 	fr_io_process_t process;
-	proto_radius_track_t *track = request->async->packet_ctx;
+	fr_io_track_t *track = request->async->packet_ctx;
 
 	rad_assert(request->packet->code != 0);
 	rad_assert(request->packet->code <= FR_CODE_MAX);
 
-	request->server_cs = inst->server_cs;
+	request->server_cs = inst->io.server_cs;
 
 	/*
 	 *	'track' can be NULL when there's no network listener.
 	 */
-	if (inst->app_io && (track->dynamic == request->async->recv_time)) {
+	if (inst->io.app_io && (track->dynamic == request->async->recv_time)) {
 		fr_app_process_t const	*app_process;
 
 		app_process = (fr_app_process_t const *) inst->dynamic_submodule->module->common;
@@ -504,6 +494,33 @@ static void mod_process_set(void const *instance, REQUEST *request)
 	request->async->process = process;
 }
 
+
+static int mod_priority(void const *instance, uint8_t const *buffer, UNUSED size_t buflen)
+{
+	proto_radius_t const *inst = talloc_get_type_abort_const(instance, proto_radius_t);
+
+	rad_assert(buffer[0] > 0);
+	rad_assert(buffer[0] < FR_MAX_PACKET_CODE);
+
+	/*
+	 *	Disallowed packet
+	 */
+	if (!inst->priorities[buffer[0]]) return 0;
+
+	if (!inst->process_by_code[buffer[0]]) return -1;
+
+	/*
+	 *	@todo - if we cared, we could also return -1 for "this
+	 *	is a bad packet".  But that's really only for
+	 *	mod_inject, as we assume that app_io->read() always
+	 *	returns good packets.
+	 */
+
+	/*
+	 *	Return the configured priority.
+	 */
+	return inst->priorities[buffer[0]];
+}
 
 /** Open listen sockets/connect to external event source
  *
@@ -528,7 +545,7 @@ static int mod_open(void *instance, fr_schedule_t *sc, CONF_SECTION *conf)
 
 	listen->app = &proto_radius;
 	listen->app_instance = instance;
-	listen->server_cs = inst->server_cs;
+	listen->server_cs = inst->io.server_cs;
 
 	/*
 	 *	Set configurable parameters for message ring buffer.
@@ -539,18 +556,18 @@ static int mod_open(void *instance, fr_schedule_t *sc, CONF_SECTION *conf)
 	/*
 	 *	Open the socket, and add it to the scheduler.
 	 */
-	if (inst->app_io) {
+	if (inst->io.app_io) {
 		/*
 		 *	Set the listener to call our master trampoline function.
 		 */
-		listen->app_io = &proto_radius_master_io;
+		listen->app_io = &fr_master_app_io;
 		listen->app_io_instance = inst;
 
 		/*
 		 *	Don't set the connection for the main socket.  It's not connected.
 		 */
-		if (inst->app_io->open(inst->app_io_instance) < 0) {
-			cf_log_err(conf, "Failed opening %s interface", inst->app_io->name);
+		if (inst->io.app_io->open(inst->io.app_io_instance) < 0) {
+			cf_log_err(conf, "Failed opening %s interface", inst->io.app_io->name);
 			talloc_free(listen);
 			return -1;
 		}
@@ -564,11 +581,11 @@ static int mod_open(void *instance, fr_schedule_t *sc, CONF_SECTION *conf)
 			return -1;
 		}
 	} else {
-		rad_assert(!inst->dynamic_clients);
+		rad_assert(!inst->io.dynamic_clients);
 	}
 
-	inst->listen = listen;	/* Probably won't need it, but doesn't hurt */
-	inst->sc = sc;
+	inst->io.listen = listen;	/* Probably won't need it, but doesn't hurt */
+	inst->io.sc = sc;
 
 	return 0;
 }
@@ -617,46 +634,11 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	CONF_SECTION		*server = cf_item_to_section(cf_parent(conf));
 
 	/*
-	 *	Instantiate the I/O module
-	 */
-	if (inst->app_io) {
-		if (inst->app_io->instantiate &&
-		    (inst->app_io->instantiate(inst->app_io_instance,
-					       inst->app_io_conf) < 0)) {
-			cf_log_err(conf, "Instantiation failed for \"%s\"", inst->app_io->name);
-			return -1;
-		}
-	}
-
-	/*
-	 *	Instantiate proto_radius_dynamic_client
-	 */
-	if (inst->dynamic_clients) {
-		fr_app_process_t const	*app_process;
-
-		app_process = (fr_app_process_t const *)inst->dynamic_submodule->module->common;
-		if (app_process->instantiate && (app_process->instantiate(inst->dynamic_submodule->data, conf) < 0)) {
-
-			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
-			return -1;
-		}
-	}
-
-	/*
-	 *	Create the trie of clients for this socket.
-	 */
-	inst->trie = fr_trie_alloc(inst);
-	if (!inst->trie) {
-		cf_log_err(conf, "Instantiation failed for \"%s\"", inst->app_io->name);
-		return -1;
-	}
-
-	/*
 	 *	Needed to populate the code array
 	 */
 	da = fr_dict_attr_by_name(NULL, "Packet-Type");
 	if (!da) {
-		ERROR("Missing definiton for Packet-Type");
+		ERROR("Missing definition for Packet-Type");
 		return -1;
 	}
 
@@ -772,10 +754,15 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	}
 
 	/*
+	 *	No IO module, it's an empty listener.
+	 */
+	if (!inst->io.submodule) return 0;
+
+	/*
 	 *	These configuration items are not printed by default,
 	 *	because normal people shouldn't be touching them.
 	 */
-	if (!inst->max_packet_size && inst->app_io) inst->max_packet_size = inst->app_io->default_message_size;
+	if (!inst->max_packet_size && inst->io.app_io) inst->max_packet_size = inst->io.app_io->default_message_size;
 
 	if (!inst->num_messages) inst->num_messages = 256;
 
@@ -784,6 +771,37 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 
 	FR_INTEGER_BOUND_CHECK("max_packet_size", inst->max_packet_size, >=, 1024);
 	FR_INTEGER_BOUND_CHECK("max_packet_size", inst->max_packet_size, <=, 65535);
+
+	/*
+	 *	Set talloc ctx for master IO.
+	 */
+	inst->io.ctx = inst;
+
+	/*
+	 *	Instantiate the master io submodule
+	 */
+	if (fr_master_app_io.instantiate(&inst->io, conf) < 0) {
+		return -1;
+
+	}
+
+	/*
+	 *	No dynamic clients, nothing more to do.
+	 */
+	if (!inst->io.dynamic_clients) return 0;
+
+	/*
+	 *	Instantiate proto_radius_dynamic_client
+	 */
+	{
+		fr_app_process_t const	*app_process;
+
+		app_process = (fr_app_process_t const *)inst->dynamic_submodule->module->common;
+		if (app_process->instantiate && (app_process->instantiate(inst->dynamic_submodule->data, conf) < 0)) {
+			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
+			return -1;
+		}
+	}
 
 	return 0;
 }
@@ -805,12 +823,6 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	size_t			i = 0;
 	CONF_PAIR		*cp = NULL;
 	CONF_SECTION		*subcs;
-
-	/*
-	 *	The listener is inside of a virtual server.
-	 */
-	inst->magic = PR_MAIN_MAGIC;
-	inst->server_cs = cf_item_to_section(cf_parent(conf));
 
 	/*
 	 *	Bootstrap the process modules
@@ -835,77 +847,47 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 		 *	here by packet name, and doesn't need to troll
 		 *	through all of the listeners.
 		 */
-		if (!cf_data_find(inst->server_cs, fr_io_process_t, value)) {
+		if (!cf_data_find(inst->io.server_cs, fr_io_process_t, value)) {
 			fr_io_process_t *process_p;
 
-			process_p = talloc(inst->server_cs, fr_io_process_t);
+			process_p = talloc(inst->io.server_cs, fr_io_process_t);
 			*process_p = app_process->process;
 
-			(void) cf_data_add(inst->server_cs, process_p, value, NULL);
+			(void) cf_data_add(inst->io.server_cs, process_p, value, NULL);
 		}
 
 		i++;
 	}
 
 	/*
+	 *	Ensure that the server CONF_SECTION is always set.
+	 */
+	inst->io.server_cs = cf_item_to_section(cf_parent(conf));
+
+	/*
 	 *	No IO module, it's an empty listener.
 	 */
-	if (!inst->io_submodule) return 0;
+	if (!inst->io.submodule) return 0;
 
 	/*
-	 *	Bootstrap the I/O module
+	 *	These timers are usually protocol specific.
 	 */
-	inst->app_io = (fr_app_io_t const *) inst->io_submodule->module->common;
+	FR_TIMEVAL_BOUND_CHECK("idle_timeout", &inst->io.idle_timeout, >=, 1, 0);
+	FR_TIMEVAL_BOUND_CHECK("idle_timeout", &inst->io.idle_timeout, <=, 600, 0);
 
-	inst->app_io_instance = inst->io_submodule->data;
-	inst->app_io_conf = inst->io_submodule->conf;
+	FR_TIMEVAL_BOUND_CHECK("nak_lifetime", &inst->io.nak_lifetime, >=, 1, 0);
+	FR_TIMEVAL_BOUND_CHECK("nak_lifetime", &inst->io.nak_lifetime, <=, 600, 0);
 
-	inst->app_io_private = inst->app_io->private;
-	rad_assert(inst->app_io_private != NULL);
+	FR_TIMEVAL_BOUND_CHECK("cleanup_delay", &inst->io.cleanup_delay, <=, 30, 0);
 
-	if (inst->app_io->bootstrap && (inst->app_io->bootstrap(inst->app_io_instance,
-								inst->app_io_conf) < 0)) {
-		cf_log_err(inst->app_io_conf, "Bootstrap failed for \"%s\"", inst->app_io->name);
-		return -1;
+	/*
+	 *	No Access-Request packets, then no cleanup delay.
+	 */
+	if (!inst->code_allowed[FR_CODE_ACCESS_REQUEST]) {
+		inst->io.cleanup_delay.tv_sec = 0;
+		inst->io.cleanup_delay.tv_usec = 0;
+		WARN("proto_radius - setting 'cleanup_delay = 0' as this listener does not receive Access-Request packets");
 	}
-
-	/*
-	 *	Get various information after bootstrapping the IO
-	 *	module.
-	 */
-	inst->app_io_private->network_get(inst->app_io_instance, &inst->ipproto, &inst->dynamic_clients, &inst->networks);
-
-	/*
-	 *	We will need this for dynamic clients and connected sockets.
-	 */
-	inst->dl_inst = dl_instance_find(inst);
-	rad_assert(inst != NULL);
-
-	/*
-	 *	Load proto_radius_dynamic_client
-	 */
-	if (inst->dynamic_clients) {
-		if (dl_instance(inst, &inst->dynamic_submodule,
-				conf, inst->dl_inst, "dynamic_client", DL_TYPE_SUBMODULE) < 0) {
-			cf_log_err(conf, "Failed finding proto_radius_dynamic_client");
-			return -1;
-		}
-
-		/*
-		 *	Don't bootstrap the dynamic submodule.  We're
-		 *	not even sure what that means...
-		 */
-
-		// check max_clients?
-	}
-
-	FR_TIMEVAL_BOUND_CHECK("idle_timeout", &inst->idle_timeout, >=, 1, 0);
-	FR_TIMEVAL_BOUND_CHECK("idle_timeout", &inst->idle_timeout, <=, 600, 0);
-
-	FR_TIMEVAL_BOUND_CHECK("nak_lifetime", &inst->nak_lifetime, >=, 1, 0);
-	FR_TIMEVAL_BOUND_CHECK("nak_lifetime", &inst->nak_lifetime, <=, 600, 0);
-
-	FR_TIMEVAL_BOUND_CHECK("cleanup_delay", &inst->cleanup_delay, <=, 30, 0);
 
 	/*
 	 *	Hide this for now.  It's only for people who know what
@@ -921,6 +903,45 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 		memcpy(&inst->priorities, &priorities, sizeof(priorities));
 	}
 
+	/*
+	 *	Tell the master handler about the main protocol instance.
+	 */
+	inst->io.app = &proto_radius;
+	inst->io.app_instance = inst;
+
+	/*
+	 *	We will need this for dynamic clients and connected sockets.
+	 */
+	inst->io.dl_inst = dl_instance_find(inst);
+	rad_assert(inst != NULL);
+
+	/*
+	 *	Bootstrap the master IO handler.
+	 */
+	if (fr_master_app_io.bootstrap(&inst->io, conf) < 0) {
+		return -1;
+	}
+
+	/*
+	 *	proto_radius_udp determines if we have dynamic clients
+	 *	or not.
+	 */
+	if (!inst->io.dynamic_clients) return 0;
+
+	/*
+	 *	Load proto_radius_dynamic_client
+	 */
+	if (dl_instance(inst, &inst->dynamic_submodule,
+			conf, inst->io.dl_inst, "dynamic_client", DL_TYPE_SUBMODULE) < 0) {
+		cf_log_err(conf, "Failed finding proto_radius_dynamic_client");
+		return -1;
+	}
+
+	/*
+	 *	Don't bootstrap the dynamic submodule.  We're
+	 *	not even sure what that means...
+	 */
+
 	return 0;
 }
 
@@ -935,5 +956,6 @@ fr_app_t proto_radius = {
 	.open		= mod_open,
 	.decode		= mod_decode,
 	.encode		= mod_encode,
-	.process_set	= mod_process_set
+	.process_set	= mod_process_set,
+	.priority	= mod_priority
 };

@@ -23,7 +23,7 @@
  *
  * @copyright 2016 Alan DeKok <aland@freeradius.org>
  */
-RCSIDH(transport_h, "$Id$")
+RCSIDH(io_h, "$Id$")
 
 #include <talloc.h>
 
@@ -36,6 +36,7 @@ extern "C" {
 #endif
 
 typedef struct fr_listen fr_listen_t;
+typedef struct fr_trie_t fr_trie_t;
 
 /**
  *  Tell an async process function if it should run or exit.
@@ -255,6 +256,32 @@ typedef int (*fr_io_data_inject_t)(void *instance,uint8_t *buffer, size_t buffer
  */
 typedef void (*fr_io_data_vnode_t)(void *instance, uint32_t fflags);
 
+/** Compare two packets for storing in a duplicate detection tree.
+ *
+ * We presume that the packets are well formed.
+ *
+ * The comparison should be stable.  i.e. compare the packets a field
+ * at a time.  If the field is different, return the result from that
+ * field.
+ *
+ * The comparison order of the fields should be "very different" to
+ * "much the same".  The packets are put into an rbtree, so having a
+ * large fanout at the top is useful.
+ *
+ * Note that this function should not check if the packets are
+ * completely identical.  Instead, if checks whether or not the
+ * packets take the same place in any dedup tree.
+ *
+ * @param[in] instance		the context for this function
+ * @param[in] packet1		one packet
+ * @param[in] packet2		a second packet
+ * @return
+ *	- <0 on packet one "smaller" than packet two
+ *	- >0 on packet two "larger" than packet one
+ *	- =0 on the two packets being identical
+ */
+typedef int (*fr_io_data_cmp_t)(void const *instance, void const *packet1, void const *packet2);
+
 /**  Handle a close or error on the socket.
  *
  *  In general, the only thing to do on errors is to close the
@@ -273,6 +300,29 @@ typedef int (*fr_io_signal_t)(void const *instance);
  *
  */
 typedef	fr_io_final_t (*fr_io_process_t)(REQUEST *request, fr_io_action_t action);
+
+/*
+ *	Structures and definitions for the master IO handler.
+ */
+typedef struct {
+	fr_ipaddr_t			src_ipaddr;
+	fr_ipaddr_t			dst_ipaddr;
+	int				if_index;
+
+	uint16_t			src_port;
+	uint16_t 			dst_port;
+
+	RADCLIENT const			*radclient;		//!< old-style client definition
+} fr_io_address_t;
+
+typedef int (*fr_io_connection_set_t)(void *instance, fr_io_address_t *connection);
+
+typedef struct radclient RADCLIENT;
+
+typedef RADCLIENT *(*fr_io_client_find_t)(void *instance, fr_ipaddr_t const *ipaddr, int ipproto);
+
+typedef void (*fr_io_network_get_t)(void *instance, int *ipproto, bool *dynamic_clients, fr_trie_t const **trie);
+
 #ifdef __cplusplus
 }
 #endif

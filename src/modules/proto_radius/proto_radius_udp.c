@@ -62,15 +62,17 @@ typedef struct proto_radius_udp_t {
 	bool				dynamic_clients;	//!< whether we have dynamic clients
 
 	fr_trie_t			*trie;			//!< for parsed networks
-	fr_ipaddr_t			*network;		//!< network for dynamic clients
+	fr_ipaddr_t			*allow;			//!< allowed networks for dynamic clients
+	fr_ipaddr_t			*deny;			//!< denied networks for dynamic clients
 
-	proto_radius_connection_t	*connection;		//!< for connected sockets.
+	fr_io_address_t			*connection;		//!< for connected sockets.
 
 } proto_radius_udp_t;
 
 
-static const CONF_PARSER allow_config[] = {
-	{ FR_CONF_OFFSET("network", FR_TYPE_COMBO_IP_PREFIX | FR_TYPE_MULTI, proto_radius_udp_t, network) },
+static const CONF_PARSER networks_config[] = {
+	{ FR_CONF_OFFSET("allow", FR_TYPE_COMBO_IP_PREFIX | FR_TYPE_MULTI, proto_radius_udp_t, allow) },
+	{ FR_CONF_OFFSET("deny", FR_TYPE_COMBO_IP_PREFIX | FR_TYPE_MULTI, proto_radius_udp_t, deny) },
 
 	CONF_PARSER_TERMINATOR
 };
@@ -88,7 +90,7 @@ static const CONF_PARSER udp_listen_config[] = {
 	{ FR_CONF_IS_SET_OFFSET("recv_buff", FR_TYPE_UINT32, proto_radius_udp_t, recv_buff) },
 
 	{ FR_CONF_OFFSET("dynamic_clients", FR_TYPE_BOOL, proto_radius_udp_t, dynamic_clients) } ,
-	{ FR_CONF_POINTER("allow", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) allow_config },
+	{ FR_CONF_POINTER("networks", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) networks_config },
 
 	{ FR_CONF_OFFSET("max_packet_size", FR_TYPE_UINT32, proto_radius_udp_t, max_packet_size), .dflt = "4096" } ,
        	{ FR_CONF_OFFSET("max_attributes", FR_TYPE_UINT32, proto_radius_udp_t, max_attributes), .dflt = STRINGIFY(RADIUS_MAX_ATTRIBUTES) } ,
@@ -100,7 +102,7 @@ static const CONF_PARSER udp_listen_config[] = {
 static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time, uint8_t *buffer, size_t buffer_len, size_t *leftover, UNUSED uint32_t *priority, UNUSED bool *is_dup)
 {
 	proto_radius_udp_t		*inst = talloc_get_type_abort(instance, proto_radius_udp_t);
-	proto_radius_address_t		*address, **address_p;
+	fr_io_address_t		*address, **address_p;
 
 	int				flags;
 	ssize_t				data_size;
@@ -116,7 +118,7 @@ static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time
 	 *	Where the addresses should go.  This is a special case
 	 *	for proto_radius.
 	 */
-	address_p = (proto_radius_address_t **) packet_ctx;
+	address_p = (fr_io_address_t **) packet_ctx;
 	address = *address_p;
 	recv_time_p = *recv_time;
 
@@ -178,6 +180,13 @@ static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time
 	 *	proto_radius sets the priority
 	 */
 
+	/*
+	 *	Print out what we received.
+	 */
+	DEBUG2("proto_radius_udp - Received %s ID %d length %d %s",
+	       fr_packet_codes[buffer[0]], buffer[1],
+	       (int) packet_len, inst->name);
+
 	return packet_len;
 }
 
@@ -186,8 +195,8 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 			 UNUSED fr_time_t request_time, uint8_t *buffer, size_t buffer_len)
 {
 	proto_radius_udp_t		*inst = talloc_get_type_abort(instance, proto_radius_udp_t);
-	proto_radius_track_t		*track = talloc_get_type_abort(packet_ctx, proto_radius_track_t);
-	proto_radius_address_t		*address = track->address;
+	fr_io_track_t			*track = talloc_get_type_abort(packet_ctx, fr_io_track_t);
+	fr_io_address_t			*address = track->address;
 
 	int				flags;
 	ssize_t				data_size;
@@ -275,7 +284,7 @@ static int mod_close(void *instance)
 }
 
 
-static int mod_connection_set(void *instance, proto_radius_connection_t *connection)
+static int mod_connection_set(void *instance, fr_io_address_t *connection)
 {
 	proto_radius_udp_t *inst = talloc_get_type_abort(instance, proto_radius_udp_t);
 
@@ -343,7 +352,7 @@ static int mod_open(void *instance)
 		socklen_t salen;
 		struct sockaddr_storage src;
 
-		if (fr_ipaddr_to_sockaddr(&inst->connection->address->src_ipaddr, inst->connection->address->src_port,
+		if (fr_ipaddr_to_sockaddr(&inst->connection->src_ipaddr, inst->connection->src_port,
 					  &src, &salen) < 0) {
 			close(sockfd);
 			ERROR("Failed getting IP address");
@@ -385,6 +394,26 @@ static int mod_fd(void const *instance)
 	return inst->sockfd;
 }
 
+static int mod_compare(UNUSED void const *instance, void const *one, void const *two)
+{
+	int rcode;
+
+	uint8_t const *a = one;
+	uint8_t const *b = two;
+
+	/*
+	 *	The tree is ordered by IDs, which are (hopefully)
+	 *	pseudo-randomly distributed.
+	 */
+	rcode = (a[1] < b[1]) - (a[1] > b[1]);
+	if (rcode != 0) return rcode;
+
+	/*
+	 *	Then ordered by code, which is usally the same.
+	 */
+	return (a[0] < b[0]) - (a[0] > b[0]);
+}
+
 
 static int mod_instantiate(void *instance, UNUSED CONF_SECTION *cs)
 {
@@ -394,8 +423,6 @@ static int mod_instantiate(void *instance, UNUSED CONF_SECTION *cs)
 	/*
 	 *	Get our name.
 	 */
-//	rad_assert(inst->name == NULL);
-
 	if (fr_ipaddr_is_inaddr_any(&inst->ipaddr)) {
 		if (inst->ipaddr.af == AF_INET) {
 			strlcpy(dst_buf, "*", sizeof(dst_buf));
@@ -414,11 +441,10 @@ static int mod_instantiate(void *instance, UNUSED CONF_SECTION *cs)
 	} else {
 		char src_buf[128];
 
-		fr_value_box_snprint(src_buf, sizeof(src_buf), fr_box_ipaddr(inst->connection->address->src_ipaddr), 0);
+		fr_value_box_snprint(src_buf, sizeof(src_buf), fr_box_ipaddr(inst->connection->src_ipaddr), 0);
 
 		inst->name = talloc_typed_asprintf(inst, "proto udp from client %s port %u to server %s port %u",
-						   src_buf, inst->connection->address->src_port, dst_buf, inst->port);
-		inst->connection->name = inst->name;
+						   src_buf, inst->connection->src_port, dst_buf, inst->port);
 	}
 
 	return 0;
@@ -473,7 +499,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 	 *	e.g. allow clients from a /16, but not from a /24
 	 *	within that /16.
 	 */
-	num = talloc_array_length(inst->network);
+	num = talloc_array_length(inst->allow);
 	if (!num) {
 		if (inst->dynamic_clients) {
 			cf_log_err(cs, "The 'allow' subsection MUST contain at least one 'network' entry when 'dynamic_clients = true'.");
@@ -489,9 +515,9 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 			/*
 			 *	Can't add v4 networks to a v6 socket, or vice versa.
 			 */
-			if (inst->network[i].af != inst->ipaddr.af) {
-				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->network[i]), 0);
-				cf_log_err(cs, "Address family in entry %zd - 'network = %s' does not match 'ipaddr'", i + 1, buffer);
+			if (inst->allow[i].af != inst->ipaddr.af) {
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->allow[i]), 0);
+				cf_log_err(cs, "Address family in entry %zd - 'allow = %s' does not match 'ipaddr'", i + 1, buffer);
 				return -1;
 			}
 
@@ -499,10 +525,10 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 			 *	Duplicates are bad.
 			 */
 			network = fr_trie_match(inst->trie,
-						&inst->network[i].addr, inst->network[i].prefix);
+						&inst->allow[i].addr, inst->allow[i].prefix);
 			if (network) {
-				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->network[i]), 0);
-				cf_log_err(cs, "Cannot add duplicate entry 'network = %s'", buffer);
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->allow[i]), 0);
+				cf_log_err(cs, "Cannot add duplicate entry 'allow = %s'", buffer);
 				return -1;
 			}
 
@@ -518,10 +544,10 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 			 *	have terminal fr_trie_user_t nodes"
 			 */
 			network = fr_trie_lookup(inst->trie,
-						 &inst->network[i].addr, inst->network[i].prefix);
-			if (network && (network->prefix <= inst->network[i].prefix)) {
-				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->network[i]), 0);
-				cf_log_err(cs, "Cannot add overlapping entry 'network = %s'", buffer);
+						 &inst->allow[i].addr, inst->allow[i].prefix);
+			if (network && (network->prefix <= inst->allow[i].prefix)) {
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->allow[i]), 0);
+				cf_log_err(cs, "Cannot add overlapping entry 'allow = %s'", buffer);
 				cf_log_err(cs, "Entry is completely enclosed inside of a previously defined network.");
 				return -1;
 			}
@@ -532,16 +558,98 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 			 *	the network.
 			 */
 			if (fr_trie_insert(inst->trie,
-					   &inst->network[i].addr, inst->network[i].prefix,
-					   &inst->network[i]) < 0) {
-				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->network[i]), 0);
-				cf_log_err(cs, "Failed adding 'network = %s' to tracking table.", buffer);
+					   &inst->allow[i].addr, inst->allow[i].prefix,
+					   &inst->allow[i]) < 0) {
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->allow[i]), 0);
+				cf_log_err(cs, "Failed adding 'allow = %s' to tracking table.", buffer);
 				return -1;
 			}
+		}
+
+		/*
+		 *	And now check denied networks.
+		 */
+		num = talloc_array_length(inst->deny);
+		if (!num) return 0;
+
+		/*
+		 *	Since the default is to deny, you can only add
+		 *	a "deny" inside of a previous "allow".
+		 */
+		for (i = 0; i < num; i++) {
+			fr_ipaddr_t *network;
+			char buffer[256];
+
+			/*
+			 *	Can't add v4 networks to a v6 socket, or vice versa.
+			 */
+			if (inst->deny[i].af != inst->ipaddr.af) {
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->deny[i]), 0);
+				cf_log_err(cs, "Address family in entry %zd - 'deny = %s' does not match 'ipaddr'", i + 1, buffer);
+				return -1;
+			}
+
+			/*
+			 *	Duplicates are bad.
+			 */
+			network = fr_trie_match(inst->trie,
+						&inst->deny[i].addr, inst->deny[i].prefix);
+			if (network) {
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->deny[i]), 0);
+				cf_log_err(cs, "Cannot add duplicate entry 'deny = %s'", buffer);
+				return -1;
+			}
+
+			/*
+			 *	A "deny" can only be within a previous "allow".
+			 */
+			network = fr_trie_lookup(inst->trie,
+						&inst->deny[i].addr, inst->deny[i].prefix);
+			if (!network) {
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->deny[i]), 0);
+				cf_log_err(cs, "The network in entry %zd - 'deny = %s' is not contained within a previous 'allow'",
+					   i + 1, buffer);
+				return -1;
+			}
+
+			/*
+			 *	We hack the AF in "deny" rules.  If
+			 *	the lookup gets AF_UNSPEC, then we're
+			 *	adding a "deny" inside of a "deny".
+			 */
+			if (network->af != inst->ipaddr.af) {
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->deny[i]), 0);
+				cf_log_err(cs, "The network in entry %zd - 'deny = %s' is overlaps with another 'deny' rule",
+					   i + 1, buffer);
+				return -1;
+			}
+
+			/*
+			 *	Insert the network into the trie.
+			 *	Lookups will return the fr_ipaddr_t of
+			 *	the network.
+			 */
+			if (fr_trie_insert(inst->trie,
+					   &inst->deny[i].addr, inst->deny[i].prefix,
+					   &inst->deny[i]) < 0) {
+				fr_value_box_snprint(buffer, sizeof(buffer), fr_box_ipaddr(inst->deny[i]), 0);
+				cf_log_err(cs, "Failed adding 'deny = %s' to tracking table.", buffer);
+				return -1;
+			}
+
+			/*
+			 *	Hack it to make it a deny rule.
+			 */
+			inst->deny[i].af = AF_UNSPEC;
 		}
 	}
 
 	return 0;
+}
+
+static RADCLIENT *mod_client_find(UNUSED void *instance, fr_ipaddr_t const *ipaddr, int ipproto)
+{
+	return client_find(NULL, ipaddr, ipproto);
 }
 
 #if 0
@@ -555,11 +663,6 @@ static int mod_detach(void *instance)
 	return 0;
 }
 #endif
-
-static proto_radius_app_io_t proto_radius_app_io_private = {
-	.connection_set		= mod_connection_set,
-	.network_get		= mod_network_get,
-};
 
 extern fr_app_io_t proto_radius_udp;
 fr_app_io_t proto_radius_udp = {
@@ -579,5 +682,8 @@ fr_app_io_t proto_radius_udp = {
 	.write			= mod_write,
 	.close			= mod_close,
 	.fd			= mod_fd,
-	.private		= &proto_radius_app_io_private,
+	.compare		= mod_compare,
+	.connection_set		= mod_connection_set,
+	.network_get		= mod_network_get,
+	.client_find		= mod_client_find,
 };
