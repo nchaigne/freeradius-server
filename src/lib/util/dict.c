@@ -2527,7 +2527,7 @@ fr_dict_attr_t const *fr_dict_attr_known(fr_dict_t *dict, fr_dict_attr_t const *
 	return NULL;
 }
 
-static void dict_snprint_flags(char *out, size_t outlen, fr_dict_attr_flags_t flags)
+ssize_t fr_dict_snprint_flags(char *out, size_t outlen, fr_dict_attr_flags_t const *flags)
 {
 	char *p = out, *end = p + outlen;
 	size_t len;
@@ -2536,15 +2536,16 @@ static void dict_snprint_flags(char *out, size_t outlen, fr_dict_attr_flags_t fl
 
 #define FLAG_SET(_flag) \
 do { \
-	if (flags._flag) {\
+	if (flags->_flag) {\
 		p += strlcpy(p, STRINGIFY(_flag)",", end - p);\
-		if (p >= end) return;\
+		if (p >= end) return -1;\
 	}\
 } while (0)
 
 	FLAG_SET(is_root);
 	FLAG_SET(is_unknown);
 	FLAG_SET(is_raw);
+	FLAG_SET(is_reference);
 	FLAG_SET(internal);
 	FLAG_SET(has_tag);
 	FLAG_SET(array);
@@ -2552,24 +2553,27 @@ do { \
 	FLAG_SET(concat);
 	FLAG_SET(virtual);
 	FLAG_SET(compare);
+	FLAG_SET(named);
 
-	if (flags.encrypt) {
-		p += snprintf(p, end - p, "encrypt=%i,", flags.encrypt);
-		if (p >= end) return;
+	if (flags->encrypt) {
+		p += snprintf(p, end - p, "encrypt=%i,", flags->encrypt);
+		if (p >= end) return -1;
 	}
 
-	if (flags.length) {
-		p += snprintf(p, end - p, "length=%i,", flags.length);
-		if (p >= end) return;
+	if (flags->length) {
+		p += snprintf(p, end - p, "length=%i,", flags->length);
+		if (p >= end) return -1;
 	}
 
-	if (!out[0]) return;
+	if (!out[0]) return -1;
 
 	/*
 	 *	Trim the comma
 	 */
 	len = strlen(out);
 	if (out[len - 1] == ',') out[len - 1] = '\0';
+
+	return len;
 }
 
 void fr_dict_print(fr_dict_attr_t const *da, int depth)
@@ -2578,7 +2582,7 @@ void fr_dict_print(fr_dict_attr_t const *da, int depth)
 	unsigned int i;
 	char const *name;
 
-	dict_snprint_flags(buff, sizeof(buff), da->flags);
+	fr_dict_snprint_flags(buff, sizeof(buff), &da->flags);
 
 	switch (da->type) {
 	case FR_TYPE_VSA:
@@ -5239,35 +5243,38 @@ int fr_dict_read(fr_dict_t *dict, char const *dir, char const *filename)
  */
 int fr_dict_attr_autoload(fr_dict_attr_autoload_t const *to_load)
 {
-	fr_dict_attr_t const	*da;
+	fr_dict_attr_t const		*da;
+	fr_dict_attr_autoload_t const	*p = to_load;
 
-	if (!to_load->dict) {
-		fr_strerror_printf("Invalid autoload entry, missing dictionary pointer");
-		return -1;
-	}
+	for (p = to_load; p->out; p++) {
+		if (!p->dict) {
+			fr_strerror_printf("Invalid autoload entry, missing dictionary pointer");
+			return -1;
+		}
 
 #if 0
-	if (!*to_load->dict) {
-		fr_strerror_printf("Missing dictionary required for attribute autoresolution");
-		return -1;
-	}
+		if (!*p->dict) {
+			fr_strerror_printf("Missing dictionary required for attribute autoresolution");
+			return -1;
+		}
 #endif
 
-	da = fr_dict_attr_by_name(*to_load->dict, to_load->name);
-	if (!da) {
-		fr_strerror_printf("Attribute \"%s\" not found in %s dictionary", to_load->name,
-				   *to_load->dict ? (*to_load->dict)->root->name : "internal");
-		return -1;
-	}
+		da = fr_dict_attr_by_name(*p->dict, p->name);
+		if (!da) {
+			fr_strerror_printf("Attribute \"%s\" not found in %s dictionary", p->name,
+					   *p->dict ? (*p->dict)->root->name : "internal");
+			return -1;
+		}
 
-	if (da->type != to_load->type) {
-		fr_strerror_printf("Attribute \"%s\" should be type %s, but defined as type %s", da->name,
-				   fr_int2str(dict_attr_types, to_load->type, "?Unknown?"),
-				   fr_int2str(dict_attr_types, da->type, "?Unknown?"));
-		return -1;
-	}
+		if (da->type != p->type) {
+			fr_strerror_printf("Attribute \"%s\" should be type %s, but defined as type %s", da->name,
+					   fr_int2str(dict_attr_types, p->type, "?Unknown?"),
+					   fr_int2str(dict_attr_types, da->type, "?Unknown?"));
+			return -1;
+		}
 
-	if (to_load->out) *(to_load->out) = da;
+		if (p->out) *(p->out) = da;
+	}
 
 	return 0;
 }
@@ -5281,16 +5288,29 @@ int fr_dict_attr_autoload(fr_dict_attr_autoload_t const *to_load)
  */
 int fr_dict_autoload(fr_dict_autoload_t const *to_load)
 {
-	fr_dict_t *dict = NULL;
+	fr_dict_t			*dict = NULL;
+	fr_dict_autoload_t const	*p;
 
-	if (!to_load->out || !to_load->base_dir || to_load->proto) {
-		fr_strerror_printf("autoload missing parameter");
-		return -1;
+	for (p = to_load; p->out; p++) {
+		if (unlikely(!p->out)) {
+			fr_strerror_printf("autoload missing parameter out");
+			return -1;
+		}
+
+		if (unlikely(!p->base_dir)) {
+			fr_strerror_printf("autoload missing parameter base_dir");
+			return 0;	/* Change to -1 later */
+		}
+
+		if (unlikely(!p->proto)) {
+			fr_strerror_printf("autoload missing parameter proto");
+			return -1;
+		}
+
+		if (fr_dict_protocol_afrom_file(NULL, &dict, p->base_dir, p->proto) < 0) return -1;
+
+		if (p->out) *(p->out) = dict;
 	}
-
-	if (fr_dict_protocol_afrom_file(NULL, &dict, to_load->base_dir, to_load->proto) < 0) return -1;
-
-	if (to_load->out) *(to_load->out) = dict;
 
 	return 0;
 }
@@ -5301,12 +5321,16 @@ int fr_dict_autoload(fr_dict_autoload_t const *to_load)
  */
 void fr_dict_autofree(fr_dict_autoload_t const *to_free)
 {
-	fr_dict_t const **dict = to_free->out;
+	fr_dict_t const			**dict;
+	fr_dict_autoload_t const	*p = to_free;
 
-	if (!*dict) return;
+	for (p = to_free; p->out; p++) {
+		dict = to_free->out;
+		if (!*dict) continue;
 
-	talloc_decrease_ref_count(*dict);
-	*dict = NULL;
+		talloc_decrease_ref_count(*dict);
+		*dict = NULL;
+	}
 }
 
 static void _fr_dict_dump(fr_dict_attr_t const *da, unsigned int lvl)

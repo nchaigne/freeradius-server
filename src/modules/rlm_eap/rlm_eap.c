@@ -66,6 +66,13 @@ static const CONF_PARSER module_config[] = {
 static fr_dict_t const *dict_freeradius;
 static fr_dict_t const *dict_radius;
 
+extern fr_dict_autoload_t rlm_eap_dict[];
+fr_dict_autoload_t rlm_eap_dict[] = {
+	{ .out = &dict_freeradius, .proto = "freeradius" },
+	{ .out = &dict_radius, .proto = "radius" },
+	{ NULL }
+};
+
 static fr_dict_attr_t const *attr_auth_type;
 static fr_dict_attr_t const *attr_post_auth_type;
 fr_dict_attr_t const *attr_eap_type;
@@ -88,13 +95,6 @@ fr_dict_attr_autoload_t rlm_eap_dict_attr[] = {
 	{ .out = &attr_state, .name = "State", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
 	{ .out = &attr_user_name, .name = "User-Name", .type = FR_TYPE_STRING, .dict = &dict_radius },
 
-	{ NULL }
-};
-
-extern fr_dict_autoload_t rlm_eap_dict[];
-fr_dict_autoload_t rlm_eap_dict[] = {
-	{ .out = &dict_freeradius, .proto = "freeradius" },
-	{ .out = &dict_radius, .proto = "radius" },
 	{ NULL }
 };
 
@@ -1043,6 +1043,23 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 	return 0;
 }
 
+static int mod_load(void)
+{
+	rlm_eap_t	instance = { .name = "global" };
+	rlm_eap_t	*inst = &instance;
+
+	if (eap_base_init() < 0) {
+		PERROR("Failed initialising EAP base library");
+		return -1;
+	}
+	return 0;
+}
+
+static void mod_unload(void)
+{
+	eap_base_free();
+}
+
 /*
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
@@ -1052,6 +1069,8 @@ rad_module_t rlm_eap = {
 	.name		= "eap",
 	.inst_size	= sizeof(rlm_eap_t),
 	.config		= module_config,
+	.load		= mod_load,
+	.unload		= mod_unload,
 	.bootstrap	= mod_bootstrap,
 	.instantiate	= mod_instantiate,
 	.methods = {
