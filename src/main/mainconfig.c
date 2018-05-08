@@ -258,6 +258,84 @@ static const CONF_PARSER switch_users_config[] = {
 };
 
 
+extern const CONF_PARSER virtual_servers_on_read_config[];
+
+/** Callback to automatically load dictionaries required by modules
+ *
+ * @param[in] module	being loaded.
+ * @param[in] symbol	An array of fr_dict_autoload_t to load.
+ * @param[in] user_ctx	unused.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
+ */
+static int _module_dict_autoload(dl_t const *module, void *symbol, UNUSED void *user_ctx)
+{
+	DEBUG("Loading dictionary %s", module->name);
+
+#if 0
+	if (fr_dict_autoload(main_config.dictionary_dir, (fr_dict_autoload_t const *)symbol) < 0) {
+		WARN("Failed loading dictionary: %s", fr_strerror());
+		return 0;
+	}
+#else
+	/*
+	 *	Hack for now
+	 */
+	fr_dict_autoload_t const	*to_load, *p;
+	char				buffer[256];
+
+	to_load = symbol;
+
+	for (p = to_load; p->out; p++) {
+		snprintf(buffer, sizeof(buffer), "dictionary.%s", p->proto);
+
+		/*
+		 *	0   == loaded
+		 *	-1  == error on load
+		 *	-2  == non-existent
+		 */
+		if (fr_dict_read(main_config.dict, main_config.dictionary_dir, buffer) == -1) {
+			return -1;
+		}
+
+		if (p->out) *(p->out) = main_config.dict;
+	}
+#endif
+
+	return 0;
+}
+
+/** Callback to automatically free a dictionary when the module is unloaded
+ *
+ * @param[in] module	being loaded.
+ * @param[in] symbol	An array of fr_dict_autoload_t to load.
+ * @param[in] user_ctx	unused.
+ */
+static void _module_dict_autofree(UNUSED dl_t const *module, UNUSED void *symbol, UNUSED void *user_ctx)
+{
+//	fr_dict_autofree(((fr_dict_autoload_t *)symbol));
+}
+
+/** Callback to automatically resolve attributes and check the types are correct
+ *
+ * @param[in] module	being loaded.
+ * @param[in] symbol	An array of fr_dict_autoload_t to load.
+ * @param[in] user_ctx	unused.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
+ */
+static int _module_dict_attr_autoload(dl_t const *module, void *symbol, UNUSED void *user_ctx)
+{
+	if (fr_dict_attr_autoload((fr_dict_attr_autoload_t *)symbol) < 0) {
+		ERROR("%s: %s", module->name, fr_strerror());
+		return -1;
+	}
+
+	return 0;
+}
+
 static size_t config_escape_func(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg)
 {
 	size_t len = 0;
@@ -715,8 +793,6 @@ do {\
 	if (!subcs) {
 		subcs = cf_section_alloc(cs, cs, "feature", NULL);
 		if (!subcs) return -1;
-
-		cf_section_add(cs, subcs);
 	}
 	dependency_init_features(subcs);
 
@@ -729,9 +805,31 @@ do {\
 	if (!subcs) {
 		subcs = cf_section_alloc(cs, cs, "version", NULL);
 		if (!subcs) return -1;
-		cf_section_add(cs, subcs);
 	}
 	dependency_version_numbers_init(subcs);
+
+	/*
+	 *	@todo - not quite done yet... these dictionaries have
+	 *	to be loaded from radius_dir.  But the
+	 *	fr_dict_autoload_t has a base_dir pointer
+	 *	there... it's probably best to pass radius_dir into
+	 *	fr_dict_autoload() and have it use that instead.
+	 *
+	 *	Once that's done, the proto_foo dictionaries SHOULD be
+	 *	autoloaded, AND loaded before the configuration files
+	 *	are read.
+	 *
+	 *	And then all of the modules have to be updated to use
+	 *	their local dict pointer, instead of NULL.
+	 */
+	if (cf_section_rules_push(cs, virtual_servers_on_read_config) < 0) return -1;
+
+	/*
+	 *	Register dictionary autoload callbacks
+	 */
+	dl_symbol_init_cb_register(DL_DICT_ATTR_PRIORITY, "dict_attr", _module_dict_attr_autoload, NULL);
+	dl_symbol_init_cb_register(DL_DICT_PRIORITY, "dict", _module_dict_autoload, NULL);
+	dl_symbol_free_cb_register(DL_DICT_PRIORITY, "dict", _module_dict_autofree, NULL);
 
 	/* Read the configuration file */
 	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf", radius_dir, main_config.name);

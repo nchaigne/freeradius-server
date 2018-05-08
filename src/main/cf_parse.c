@@ -130,6 +130,7 @@ static int CC_HINT(nonnull(2, 3, 4)) cf_pair_parse_value(TALLOC_CTX *ctx, void *
 
 	rad_assert(cp);
 	rad_assert(!(type & FR_TYPE_ATTRIBUTE) || tmpl);	 /* Attribute flag only valid for templates */
+	rad_assert((type & FR_TYPE_ON_READ) == 0);
 
 	if (required) cant_be_empty = true;		/* May want to review this in the future... */
 
@@ -1105,6 +1106,11 @@ int cf_section_parse(TALLOC_CTX *ctx, void *base, CONF_SECTION *cs)
 		rule = cf_data_value(rule_cd);
 
 		/*
+		 *	Ignore ON_READ parse rules
+		 */
+		if ((rule->type & FR_TYPE_ON_READ) != 0) continue;
+
+		/*
 		 *	Pre-allocate the config structure to hold default values
 		 */
 		if (cf_section_parse_init(cs, base, rule) < 0) return -1;
@@ -1428,7 +1434,7 @@ int _cf_section_rule_push(CONF_SECTION *cs, CONF_PARSER const *rule, char const 
 	 */
 	if (!_cf_data_add_static(CF_TO_ITEM(cs), rule, "CONF_PARSER", rule->name, filename, lineno)) {
 		CONF_DATA const *cd;
-		CONF_PARSER const *old;
+		CONF_PARSER *old;
 
 		cd = cf_data_find(CF_TO_ITEM(cs), CONF_PARSER, rule->name);
 		old = cf_data_value(cd);
@@ -1438,6 +1444,29 @@ int _cf_section_rule_push(CONF_SECTION *cs, CONF_PARSER const *rule, char const 
 		 *	Shut up about duplicates.
 		 */
 		if (memcmp(rule, old, sizeof(*rule)) == 0) {
+			return 0;
+		}
+
+		/*
+		 *	Remove any ON_READ callbacks, and add the new
+		 *	rule in its place.
+		 */
+		if ((old->type & FR_TYPE_ON_READ) != 0) {
+			CONF_DATA *cd1;
+
+			/*
+			 *	Over-write the rule in place.
+			 *
+			 *	We'd like to call cf_remove(), but
+			 *	that apparently doesn't work for
+			 *	CONF_DATA.  We don't need to
+			 *	free/alloc one, so re-using this is
+			 *	fine.
+			 */
+			memcpy(&cd1, &cd, sizeof(cd1));
+			cd1->data = rule;
+			cd1->item.filename = filename;
+			cd1->item.lineno = lineno;
 			return 0;
 		}
 

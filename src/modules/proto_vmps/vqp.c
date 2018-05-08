@@ -70,6 +70,14 @@ RCSID("$Id$")
 #define VQP_VERSION (1)
 #define VQP_MAX_ATTRIBUTES (12)
 
+char const *fr_vmps_codes[FR_MAX_VMPS_CODE] = {
+	[FR_VMPS_PACKET_TYPE_VALUE_VMPS_JOIN_REQUEST] = "VMPS-Join-Request",
+	[FR_VMPS_PACKET_TYPE_VALUE_VMPS_JOIN_RESPONSE] = "VMPS-Join-Response",
+	[FR_VMPS_PACKET_TYPE_VALUE_VMPS_RECONFIRM_REQUEST] = "VMPS-Reconfirm-Request",
+	[FR_VMPS_PACKET_TYPE_VALUE_VMPS_RECONFIRM_RESPONSE] = "VMPS-Reconfirm-Response",
+};
+
+
 static size_t const fr_vqp_attr_sizes[FR_TYPE_MAX + 1][2] = {
 	[FR_TYPE_INVALID]	= {~0, 0},	//!< Ensure array starts at 0 (umm?)
 
@@ -320,6 +328,15 @@ int vqp_decode(RADIUS_PACKET *packet)
 		ptr += 6;
 
 		/*
+		 *	fr_vmps_ok() should have checked this already,
+		 *	but it doesn't hurt to do it again.
+		 */
+		if (attr_len > (size_t) (end - ptr)) {
+			fr_strerror_printf("Attribute length exceeds received data");
+			goto error;
+		}
+
+		/*
 		 *	Hack to get the dictionaries to work correctly.
 		 */
 		attr |= 0x2000;
@@ -332,49 +349,16 @@ int vqp_decode(RADIUS_PACKET *packet)
 			return -1;
 		}
 
-		switch (vp->vp_type) {
-		case FR_TYPE_ETHERNET:
-			if (attr_len != fr_vqp_attr_sizes[vp->vp_type][0]) goto unknown;
-
-			memcpy(&vp->vp_ether, ptr, 6);
-			break;
-
-		case FR_TYPE_IPV4_ADDR:
-			if (attr_len == fr_vqp_attr_sizes[vp->vp_type][0]) {
-				memcpy(&vp->vp_ipv4addr, ptr, 4);
-				break;
-			}
-
-			/*
-			 *	Value doesn't match the type we have for the
-			 *	valuepair so we must change it's da to an
-			 *	unknown attr.
-			 */
-		unknown:
-			fr_pair_to_unknown(vp);
-			/* FALL-THROUGH */
-
-		default:
-		case FR_TYPE_OCTETS:
-			if (attr_len > (size_t)(end - ptr)) {
-				fr_strerror_printf("Attribute length exceeds received data");
-				goto error;
-			}
-			if (attr_len == 0) break;
-
-			fr_pair_value_memcpy(vp, ptr, attr_len);
-			break;
-
-		case FR_TYPE_STRING:
-			if (attr_len > (size_t)(end - ptr)) {
-				fr_strerror_printf("Attribute length exceeds received data");
-				goto error;
-			}
-			if (attr_len == 0) break;
-
-			fr_pair_value_bstrncpy(vp, ptr, attr_len);
-			break;
+		/*
+		 *	Rely on value_box to do the work.
+		 *
+		 *	@todo - if the attribute is malformed, create a "raw" one.
+		 */
+		if (fr_value_box_from_network(vp, &vp->data, vp->da->type, vp->da, ptr, attr_len, true) < 0) {
+			talloc_free(vp);
+			return -1;
 		}
+
 		ptr += attr_len;
 		vp->vp_tainted = true;
 		debug_pair(vp);
@@ -405,6 +389,136 @@ static int contents[5][VQP_MAX_ATTRIBUTES] = {
 	{ 0x0c03, 0x0c08, 0,      0,      0,      0 }
 };
 
+
+ssize_t fr_vmps_encode(uint8_t *buffer, size_t buflen, uint8_t const *original,
+		       int code, uint32_t id, VALUE_PAIR *vps)
+{
+	uint8_t *attr;
+	VALUE_PAIR *vp;
+	fr_cursor_t cursor;
+
+	if (buflen < 8) {
+		fr_strerror_printf("Output buffer is too small for VMPS header.");
+		return -1;
+	}
+
+	buffer[0] = VQP_VERSION;
+	buffer[1] = code;
+	buffer[2] = 0;
+
+	/*
+	 *	The number of attributes is hard-coded.
+	 */
+	if ((code == 1) || (code == 3)) {
+		uint32_t sequence;
+
+		buffer[3] = VQP_MAX_ATTRIBUTES;
+
+		sequence = htonl(id);
+		memcpy(buffer + 4, &sequence, 4);
+	} else {
+		if (!original) {
+			fr_strerror_printf("Cannot send VQP response without request");
+			return -1;
+		}
+
+		/*
+		 *	Packet Sequence Number
+		 */
+		memcpy(buffer + 4, original + 4, 4);
+
+		buffer[3] = 2;
+	}
+
+	attr = buffer + 8;
+
+	/*
+	 *	Encode the VP's.
+	 */
+	fr_cursor_init(&cursor, &vps);
+	while ((vp = fr_cursor_current(&cursor))) {
+		size_t len;
+
+		if (vp->da->flags.internal) goto next;
+
+		/*
+		 *	Skip non-VMPS attributes/
+		 */
+		if (!((vp->da->attr >= 0x2c01) && (vp->da->attr <= 0x2c08))) goto next;
+
+		if (attr >= (buffer + buflen)) break;
+
+		debug_pair(vp);
+
+		switch (vp->vp_type) {
+		case FR_TYPE_IPV4_ADDR:
+			len = fr_vqp_attr_sizes[vp->vp_type][0];
+			break;
+
+		case FR_TYPE_ETHERNET:
+			len = fr_vqp_attr_sizes[vp->vp_type][0];
+			break;
+
+		case FR_TYPE_OCTETS:
+		case FR_TYPE_STRING:
+			len = vp->vp_length;
+			break;
+
+		default:
+			return -1;
+		}
+
+		/*
+		 *	If the attribute overflows the buffer, stop.
+		 */
+		if ((attr + 6 + len) >= (buffer + buflen)) break;
+
+		/*
+		 *	Type.  Note that we look at only the lower 8
+		 *	bits, as the upper 8 bits have been hacked.
+		 *	See also dictionary.vqp
+		 */
+		attr[0] = 0;
+		attr[1] = 0;
+		attr[2] = 0x0c;
+		attr[3] = vp->da->attr & 0xff;
+
+		/* Length */
+		attr[4] = (len >> 8) & 0xff;
+		attr[5] = len & 0xff;
+
+		attr += 6;
+
+		/* Data */
+		switch (vp->vp_type) {
+		case FR_TYPE_IPV4_ADDR:
+			memcpy(attr, &vp->vp_ipv4addr, len);
+			attr += len;
+			break;
+
+		case FR_TYPE_ETHERNET:
+			memcpy(attr, vp->vp_ether, len);
+			attr += len;
+			break;
+
+		case FR_TYPE_OCTETS:
+		case FR_TYPE_STRING:
+			memcpy(attr, vp->vp_octets, len);
+			attr += len;
+			break;
+
+		default:
+			return -1;
+		}
+
+next:
+		fr_cursor_next(&cursor);
+	}
+
+	return attr - buffer;
+}
+
+
 int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 {
 	int		i, code, length;
@@ -418,7 +532,6 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 	}
 
 	if (packet->data) return 0;
-
 
 	code = packet->code;
 	if (!code) {
@@ -680,4 +793,67 @@ ssize_t vqp_packet_size(uint8_t const *data, size_t data_len)
 	 *	We've reached the end of the packet.
 	 */
 	return ptr - data;
+}
+
+static void print_hex_data(uint8_t const *ptr, int attrlen, int depth)
+{
+	int i;
+	static char const tabs[] = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
+
+	for (i = 0; i < attrlen; i++) {
+		if ((i > 0) && ((i & 0x0f) == 0x00))
+			fprintf(fr_log_fp, "%.*s", depth, tabs);
+		fprintf(fr_log_fp, "%02x ", ptr[i]);
+		if ((i & 0x0f) == 0x0f) fprintf(fr_log_fp, "\n");
+	}
+	if ((i & 0x0f) != 0) fprintf(fr_log_fp, "\n");
+}
+
+
+/** Print a raw VMPS packet as hex.
+ *
+ */
+void fr_vmps_print_hex(FILE *fp, uint8_t const *packet, size_t packet_len)
+{
+	int length;
+	uint8_t const *attr, *end;
+	uint32_t id;
+
+	if (packet_len < 8) return;
+
+	fprintf(fp, "  Version:\t\t%u\n", packet[0]);
+
+	if ((packet[1] > 0) && (packet[1] < FR_MAX_VMPS_CODE) && fr_vmps_codes[packet[1]]) {
+		fprintf(fp, "  OpCode:\t\t%s\n", fr_vmps_codes[packet[1]]);
+	} else {
+		fprintf(fp, "  OpCode:\t\t%u\n", packet[1]);
+	}
+
+	if ((packet[2] > 0) && (packet[2] < FR_MAX_VMPS_CODE) && fr_vmps_codes[packet[2]]) {
+		fprintf(fp, "  OpCode:\t\t%s\n", fr_vmps_codes[packet[2]]);
+	} else {
+		fprintf(fp, "  OpCode:\t\t%u\n", packet[2]);
+	}
+
+	fprintf(fp, "  Data Count:\t\t%u\n", packet[3]);
+
+	memcpy(&id, packet + 4, 4);
+	id = ntohl(id);
+
+	fprintf(fp, "  ID:\t%08x\n", id);
+
+	if (packet_len == 8) return;
+
+	for (attr = packet + 8, end = packet + packet_len;
+	     attr < end;
+	     attr += length) {
+		memcpy(&id, attr, 4);
+		id = ntohl(id);
+
+		length = (attr[4] << 8) | attr[5];
+
+		fprintf(fp, "\t\t%08x  %04x  ", id, length);
+
+		print_hex_data(attr + 5, length, 3);
+	}
 }

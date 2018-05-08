@@ -16,16 +16,16 @@
 
 /**
  * $Id$
- * @file proto_radius_udp.c
- * @brief RADIUS handler for UDP.
+ * @file proto_radius_tcp.c
+ * @brief RADIUS handler for TCP.
  *
- * @copyright 2018 The FreeRADIUS server project.
- * @copyright 2018 Alan DeKok (aland@deployingradius.com)
+ * @copyright 2016 The FreeRADIUS server project.
+ * @copyright 2016 Alan DeKok (aland@deployingradius.com)
  */
 #include <netdb.h>
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/protocol.h>
-#include <freeradius-devel/udp.h>
+#include <freeradius-devel/tcp.h>
 #include <freeradius-devel/trie.h>
 #include <freeradius-devel/radius/radius.h>
 #include <freeradius-devel/io/io.h>
@@ -33,9 +33,8 @@
 #include <freeradius-devel/io/listen.h>
 #include <freeradius-devel/io/schedule.h>
 #include <freeradius-devel/rad_assert.h>
-#include "proto_vmps.h"
-
-typedef struct proto_vmps_udp_t {
+#include "proto_radius.h"
+typedef struct proto_radius_tcp_t {
 	char const			*name;			//!< socket name
 	CONF_SECTION			*cs;			//!< our configuration
 
@@ -52,6 +51,7 @@ typedef struct proto_vmps_udp_t {
 	uint32_t			recv_buff;		//!< How big the kernel's receive buffer should be.
 
 	uint32_t			max_packet_size;	//!< for message ring buffer.
+	uint32_t			max_attributes;		//!< Limit maximum decodable attributes.
 
 	fr_stats_t			stats;			//!< statistics for this socket
 
@@ -67,127 +67,135 @@ typedef struct proto_vmps_udp_t {
 
 	fr_io_address_t			*connection;		//!< for connected sockets.
 
-} proto_vmps_udp_t;
+} proto_radius_tcp_t;
 
 
 static const CONF_PARSER networks_config[] = {
-	{ FR_CONF_OFFSET("allow", FR_TYPE_COMBO_IP_PREFIX | FR_TYPE_MULTI, proto_vmps_udp_t, allow) },
-	{ FR_CONF_OFFSET("deny", FR_TYPE_COMBO_IP_PREFIX | FR_TYPE_MULTI, proto_vmps_udp_t, deny) },
+	{ FR_CONF_OFFSET("allow", FR_TYPE_COMBO_IP_PREFIX | FR_TYPE_MULTI, proto_radius_tcp_t, allow) },
+	{ FR_CONF_OFFSET("deny", FR_TYPE_COMBO_IP_PREFIX | FR_TYPE_MULTI, proto_radius_tcp_t, deny) },
 
 	CONF_PARSER_TERMINATOR
 };
 
 
-static const CONF_PARSER udp_listen_config[] = {
-	{ FR_CONF_OFFSET("ipaddr", FR_TYPE_COMBO_IP_ADDR, proto_vmps_udp_t, ipaddr) },
-	{ FR_CONF_OFFSET("ipv4addr", FR_TYPE_IPV4_ADDR, proto_vmps_udp_t, ipaddr) },
-	{ FR_CONF_OFFSET("ipv6addr", FR_TYPE_IPV6_ADDR, proto_vmps_udp_t, ipaddr) },
+static const CONF_PARSER tcp_listen_config[] = {
+	{ FR_CONF_OFFSET("ipaddr", FR_TYPE_COMBO_IP_ADDR, proto_radius_tcp_t, ipaddr) },
+	{ FR_CONF_OFFSET("ipv4addr", FR_TYPE_IPV4_ADDR, proto_radius_tcp_t, ipaddr) },
+	{ FR_CONF_OFFSET("ipv6addr", FR_TYPE_IPV6_ADDR, proto_radius_tcp_t, ipaddr) },
 
-	{ FR_CONF_OFFSET("interface", FR_TYPE_STRING, proto_vmps_udp_t, interface) },
-	{ FR_CONF_OFFSET("port_name", FR_TYPE_STRING, proto_vmps_udp_t, port_name) },
+	{ FR_CONF_OFFSET("interface", FR_TYPE_STRING, proto_radius_tcp_t, interface) },
+	{ FR_CONF_OFFSET("port_name", FR_TYPE_STRING, proto_radius_tcp_t, port_name) },
 
-	{ FR_CONF_OFFSET("port", FR_TYPE_UINT16, proto_vmps_udp_t, port) },
-	{ FR_CONF_IS_SET_OFFSET("recv_buff", FR_TYPE_UINT32, proto_vmps_udp_t, recv_buff) },
+	{ FR_CONF_OFFSET("port", FR_TYPE_UINT16, proto_radius_tcp_t, port) },
+	{ FR_CONF_IS_SET_OFFSET("recv_buff", FR_TYPE_UINT32, proto_radius_tcp_t, recv_buff) },
 
-	{ FR_CONF_OFFSET("dynamic_clients", FR_TYPE_BOOL, proto_vmps_udp_t, dynamic_clients) } ,
+	{ FR_CONF_OFFSET("dynamic_clients", FR_TYPE_BOOL, proto_radius_tcp_t, dynamic_clients) } ,
 	{ FR_CONF_POINTER("networks", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) networks_config },
 
-	{ FR_CONF_OFFSET("max_packet_size", FR_TYPE_UINT32, proto_vmps_udp_t, max_packet_size), .dflt = "1024" } ,
+	{ FR_CONF_OFFSET("max_packet_size", FR_TYPE_UINT32, proto_radius_tcp_t, max_packet_size), .dflt = "4096" } ,
+       	{ FR_CONF_OFFSET("max_attributes", FR_TYPE_UINT32, proto_radius_tcp_t, max_attributes), .dflt = STRINGIFY(RADIUS_MAX_ATTRIBUTES) } ,
 
 	CONF_PARSER_TERMINATOR
 };
 
 
-static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time, uint8_t *buffer, size_t buffer_len, size_t *leftover, UNUSED uint32_t *priority, UNUSED bool *is_dup)
+static ssize_t mod_read(void *instance, UNUSED void **packet_ctx, fr_time_t **recv_time, uint8_t *buffer, size_t buffer_len, size_t *leftover, UNUSED uint32_t *priority, UNUSED bool *is_dup)
 {
-	proto_vmps_udp_t		*inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
-	fr_io_address_t			*address, **address_p;
-
-	int				flags;
+	proto_radius_tcp_t		*inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 	ssize_t				data_size;
 	size_t				packet_len;
-	struct timeval			timestamp;
+	decode_fail_t			reason;
 
 	fr_time_t			*recv_time_p;
-	uint32_t			id;
 
-	*leftover = 0;		/* always for UDP */
-
-	/*
-	 *	Where the addresses should go.  This is a special case
-	 *	for proto_vmps.
-	 */
-	address_p = (fr_io_address_t **) packet_ctx;
-	address = *address_p;
 	recv_time_p = *recv_time;
 
 	/*
-	 *      Tell udp_recv if we're connected or not.
+	 *      Read data into the buffer.
 	 */
-	flags = UDP_FLAGS_CONNECTED * (inst->connection != NULL);
-
-	data_size = udp_recv(inst->sockfd, buffer, buffer_len, flags,
-			     &address->src_ipaddr, &address->src_port,
-			     &address->dst_ipaddr, &address->dst_port,
-			     &address->if_index, &timestamp);
+	data_size = read(inst->sockfd, buffer + *leftover, buffer_len - *leftover);
 	if (data_size < 0) {
-		DEBUG2("proto_vmps_udp got read error %zd: %s", data_size, fr_strerror());
+		DEBUG2("proto_radius_tcp got read error %zd: %s", data_size, fr_strerror());
 		return data_size;
 	}
 
+	/*
+	 *	Note that we return ERROR for all bad packets, as
+	 *	there's no point in reading RADIUS packets from a TCP
+	 *	connection which isn't sending us RADIUS packets.
+	 */
+
+	/*
+	 *	TCP read of zero means the socket is dead.
+	 */
 	if (!data_size) {
-		DEBUG2("proto_vmps_udp got no data: ignoring");
-		return 0;
+		DEBUG2("proto_radius_tcp - other side closed the socket.");
+		return -1;
 	}
 
-	packet_len = data_size;
-
-	if (data_size < 8) {
-		DEBUG2("proto_vmps_udp got 'too short' packet size %zd", data_size);
-		inst->stats.total_malformed_requests++;
-		return 0;
-	}
-
-	if (packet_len > inst->max_packet_size) {
-		DEBUG2("proto_vmps_udp got 'too long' packet size %zd > %u", data_size, inst->max_packet_size);
-		inst->stats.total_malformed_requests++;
-		return 0;
-	}
-
-	if ((buffer[1] != FR_VMPS_PACKET_TYPE_VALUE_VMPS_JOIN_REQUEST) &&
-	    (buffer[1] != FR_VMPS_PACKET_TYPE_VALUE_VMPS_RECONFIRM_REQUEST)) {
-		DEBUG("proto_vmps_udp got invalid packet code %d", buffer[0]);
+	/*
+	 *	We MUST always start with a known RADIUS packet.
+	 */
+	if ((buffer[0] == 0) || (buffer[0] > FR_MAX_PACKET_CODE)) {
+		DEBUG("proto_radius_tcp got invalid packet code %d", buffer[0]);
 		inst->stats.total_unknown_types++;
+		return -1;
+	}
+
+	/*
+	 *	Not enough for one packet.  Tell the caller that we need to read more.
+	 */
+	if (data_size < 20) {
+		*leftover = data_size;
 		return 0;
 	}
 
 	/*
-	 *      If it's not a VMPS packet, ignore it.
+	 *	Figure out how large the RADIUS packet is.
 	 */
-	if (!fr_vqp_ok(buffer, &packet_len)) {
+	packet_len = (buffer[2] << 8) | buffer[3];
+
+	/*
+	 *	We don't have a complete RADIUS packet.  Tell the
+	 *	caller that we need to read more.
+	 */
+	if ((size_t) data_size < packet_len) {
+		*leftover = data_size;
+		return 0;
+	}
+
+	/*
+	 *	We've read more than one packet.  Tell the caller that
+	 *	there's more data available, and return only one packet.
+	 */
+	if ((size_t) data_size > packet_len) {
+		*leftover = data_size - packet_len;
+	}
+
+	/*
+	 *      If it's not a RADIUS packet, ignore it.
+	 */
+	if (!fr_radius_ok(buffer, &packet_len, inst->max_attributes, false, &reason)) {
 		/*
 		 *      @todo - check for F5 load balancer packets.  <sigh>
 		 */
-		DEBUG2("proto_vmps_udp got a packet which isn't VMPS");
+		DEBUG2("proto_radius_tcp got a packet which isn't RADIUS");
 		inst->stats.total_malformed_requests++;
-		return 0;
+		return -1;
 	}
 
 	// @todo - maybe convert timestamp?
 	*recv_time_p = fr_time();
 
 	/*
-	 *	proto_vmps sets the priority
+	 *	proto_radius sets the priority
 	 */
-
-	memcpy(&id, buffer + 4, 4);
-	id = ntohl(id);
 
 	/*
 	 *	Print out what we received.
 	 */
-	DEBUG2("proto_vmps_udp - Received %d ID %08x length %d %s",
-	       buffer[1], id,
+	DEBUG2("proto_radius_tcp - Received %s ID %d length %d %s",
+	       fr_packet_codes[buffer[0]], buffer[1],
 	       (int) packet_len, inst->name);
 
 	return packet_len;
@@ -197,21 +205,16 @@ static ssize_t mod_read(void *instance, void **packet_ctx, fr_time_t **recv_time
 static ssize_t mod_write(void *instance, void *packet_ctx,
 			 UNUSED fr_time_t request_time, uint8_t *buffer, size_t buffer_len)
 {
-	proto_vmps_udp_t		*inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t		*inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 	fr_io_track_t			*track = talloc_get_type_abort(packet_ctx, fr_io_track_t);
-	fr_io_address_t			*address = track->address;
-
-	int				flags;
 	ssize_t				data_size;
 
 	/*
 	 *	@todo - share a stats interface with the parent?  or
-	 *	put the stats in the listener, so that proto_vmps
+	 *	put the stats in the listener, so that proto_radius
 	 *	can update them, too.. <sigh>
 	 */
 	inst->stats.total_responses++;
-
-	flags = UDP_FLAGS_CONNECTED * (inst->connection != NULL);
 
 	/*
 	 *	This handles the race condition where we get a DUP,
@@ -221,36 +224,25 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 	 *
 	 *	As such, if there's already a reply, then we ignore
 	 *	the encoded reply (which is probably going to be a
-	 *	NAK), and instead reply with the cached reply.
+	 *	NAK), and instead just ignore the DUP and don't reply.
 	 */
 	if (track->reply_len) {
-		if (track->reply_len >= 20) {
-			char *packet;
-
-			memcpy(&packet, &track->reply, sizeof(packet)); /* const issues */
-
-			(void) udp_send(inst->sockfd, packet, track->reply_len, flags,
-					&address->dst_ipaddr, address->dst_port,
-					address->if_index,
-					&address->src_ipaddr, address->src_port);
-		}
-
 		return buffer_len;
 	}
 
 	/*
-	 *	We only write VMPS packets.
+	 *	We only write RADIUS packets.
 	 */
 	rad_assert(buffer_len >= 20);
 
 	/*
-	 *	Only write replies if they're VMPS packets.
+	 *	Only write replies if they're RADIUS packets.
 	 *	sometimes we want to NOT send a reply...
 	 */
-	data_size = udp_send(inst->sockfd, buffer, buffer_len, flags,
-			     &address->dst_ipaddr, address->dst_port,
-			     address->if_index,
-			     &address->src_ipaddr, address->src_port);
+	data_size = write(inst->sockfd, buffer, buffer_len);
+
+	// @todo - catch EWOULDBLOCK
+	// @todo - catch partial writes
 
 	/*
 	 *	This socket is dead.  That's an error...
@@ -269,16 +261,16 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 }
 
 
-/** Open a UDP listener for VMPS
+/** Close a TCP listener for RADIUS
  *
- * @param[in] instance of the VMPS UDP I/O path.
+ * @param[in] instance of the RADIUS TCP I/O path.
  * @return
  *	- <0 on error
  *	- 0 on success
  */
 static int mod_close(void *instance)
 {
-	proto_vmps_udp_t *inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t *inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 
 	close(inst->sockfd);
 	inst->sockfd = -1;
@@ -286,10 +278,9 @@ static int mod_close(void *instance)
 	return 0;
 }
 
-
 static int mod_connection_set(void *instance, fr_io_address_t *connection)
 {
-	proto_vmps_udp_t *inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t *inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 
 	inst->connection = connection;
 	return 0;
@@ -298,48 +289,37 @@ static int mod_connection_set(void *instance, fr_io_address_t *connection)
 
 static void mod_network_get(void *instance, int *ipproto, bool *dynamic_clients, fr_trie_t const **trie)
 {
-	proto_vmps_udp_t *inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t *inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 
-	*ipproto = IPPROTO_UDP;
+	*ipproto = IPPROTO_TCP;
 	*dynamic_clients = inst->dynamic_clients;
 	*trie = inst->trie;
 }
 
 
-/** Open a UDP listener for VMPS
+/** Open a TCP listener for RADIUS
  *
- * @param[in] instance of the VMPS UDP I/O path.
+ * @param[in] instance of the RADIUS TCP I/O path.
  * @return
  *	- <0 on error
  *	- 0 on success
  */
 static int mod_open(void *instance)
 {
-	proto_vmps_udp_t *inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t *inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 
 	int				sockfd = 0;
 	uint16_t			port = inst->port;
 	CONF_SECTION			*server_cs;
 	CONF_ITEM			*ci;
 
-	sockfd = fr_socket_server_udp(&inst->ipaddr, &port, inst->port_name, true);
+	rad_assert(!inst->connection);
+
+	sockfd = fr_socket_server_tcp(&inst->ipaddr, &port, inst->port_name, true);
 	if (sockfd < 0) {
-		PERROR("Failed opening UDP socket");
+		PERROR("Failed opening TCP socket");
 	error:
 		return -1;
-	}
-
-	/*
-	 *	Set SO_REUSEPORT before bind, so that all packets can
-	 *	listen on the same destination IP address.
-	 */
-	if (1) {
-		int on = 1;
-
-		if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on)) < 0) {
-			ERROR("Failed to set socket 'reuseport': %s", fr_syserror(errno));
-			return -1;
-		}
 	}
 
 	if (fr_socket_bind(sockfd, &inst->ipaddr, &port, inst->interface) < 0) {
@@ -348,25 +328,10 @@ static int mod_open(void *instance)
 		goto error;
 	}
 
-	/*
-	 *	Connect to the client for child sockets.
-	 */
-	if (inst->connection) {
-		socklen_t salen;
-		struct sockaddr_storage src;
-
-		if (fr_ipaddr_to_sockaddr(&inst->connection->src_ipaddr, inst->connection->src_port,
-					  &src, &salen) < 0) {
-			close(sockfd);
-			ERROR("Failed getting IP address");
-			goto error;
-		}
-
-		if (connect(sockfd, (struct sockaddr *) &src, salen) < 0) {
-			close(sockfd);
-			ERROR("Failed in connect: %s", fr_syserror(errno));
-			goto error;
-		}
+	if (listen(sockfd, 8) < 0) {
+		close(sockfd);
+		PERROR("Failed listening on socket");
+		goto error;
 	}
 
 	inst->sockfd = sockfd;
@@ -379,7 +344,7 @@ static int mod_open(void *instance)
 	server_cs = cf_item_to_section(ci);
 
 	// @todo - also print out auth / acct / coa, etc.
-	DEBUG("Listening on vmps address %s bound to virtual server %s",
+	DEBUG("Listening on radius address %s bound to virtual server %s",
 	      inst->name, cf_section_name2(server_cs));
 
 	return 0;
@@ -387,14 +352,26 @@ static int mod_open(void *instance)
 
 /** Get the file descriptor for this socket.
  *
- * @param[in] instance of the VMPS UDP I/O path.
+ * @param[in] instance of the RADIUS TCP I/O path.
  * @return the file descriptor
  */
 static int mod_fd(void const *instance)
 {
-	proto_vmps_udp_t const *inst = talloc_get_type_abort_const(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t const *inst = talloc_get_type_abort_const(instance, proto_radius_tcp_t);
 
 	return inst->sockfd;
+}
+
+/** Set the file descriptor for this socket.
+ *
+ * @param[in] instance of the RADIUS TCP I/O path.
+ * @param[in] fd the FD to set
+ */
+static void mod_fd_set(void *instance, int fd)
+{
+	proto_radius_tcp_t *inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
+
+	inst->sockfd = fd;
 }
 
 static int mod_compare(UNUSED void const *instance, void const *one, void const *two)
@@ -420,7 +397,7 @@ static int mod_compare(UNUSED void const *instance, void const *one, void const 
 
 static int mod_instantiate(void *instance, UNUSED CONF_SECTION *cs)
 {
-	proto_vmps_udp_t *inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t *inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 	char		    dst_buf[128];
 
 	/*
@@ -438,7 +415,7 @@ static int mod_instantiate(void *instance, UNUSED CONF_SECTION *cs)
 	}
 
 	if (!inst->connection) {
-		inst->name = talloc_typed_asprintf(inst, "proto udp server %s port %u",
+		inst->name = talloc_typed_asprintf(inst, "proto tcp server %s port %u",
 						   dst_buf, inst->port);
 
 	} else {
@@ -446,7 +423,7 @@ static int mod_instantiate(void *instance, UNUSED CONF_SECTION *cs)
 
 		fr_value_box_snprint(src_buf, sizeof(src_buf), fr_box_ipaddr(inst->connection->src_ipaddr), 0);
 
-		inst->name = talloc_typed_asprintf(inst, "proto udp from client %s port %u to server %s port %u",
+		inst->name = talloc_typed_asprintf(inst, "proto tcp from client %s port %u to server %s port %u",
 						   src_buf, inst->connection->src_port, dst_buf, inst->port);
 	}
 
@@ -456,7 +433,7 @@ static int mod_instantiate(void *instance, UNUSED CONF_SECTION *cs)
 
 static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 {
-	proto_vmps_udp_t	*inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t	*inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 	size_t			i, num;
 
 	inst->cs = cs;
@@ -465,7 +442,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 	 *	Complain if no "ipaddr" is set.
 	 */
 	if (inst->ipaddr.af == AF_UNSPEC) {
-		cf_log_err(cs, "No 'ipaddr' was specified in the 'udp' section");
+		cf_log_err(cs, "No 'ipaddr' was specified in the 'tcp' section");
 		return -1;
 	}
 
@@ -481,11 +458,11 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 		struct servent *s;
 
 		if (!inst->port_name) {
-			cf_log_err(cs, "No 'port' was specified in the 'udp' section");
+			cf_log_err(cs, "No 'port' was specified in the 'tcp' section");
 			return -1;
 		}
 
-		s = getservbyname(inst->port_name, "udp");
+		s = getservbyname(inst->port_name, "tcp");
 		if (!s) {
 			cf_log_err(cs, "Unknown value for 'port_name = %s", inst->port_name);
 			return -1;
@@ -650,9 +627,6 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 	return 0;
 }
 
-// @todo - allow for "wildcard" clients, which allow anything
-// and then rely on "networks" to filter source IPs...
-// which means we probably want to filter on "networks" even if there are no dynamic clients
 static RADCLIENT *mod_client_find(UNUSED void *instance, fr_ipaddr_t const *ipaddr, int ipproto)
 {
 	return client_find(NULL, ipaddr, ipproto);
@@ -661,7 +635,7 @@ static RADCLIENT *mod_client_find(UNUSED void *instance, fr_ipaddr_t const *ipad
 #if 0
 static int mod_detach(void *instance)
 {
-	proto_vmps_udp_t	*inst = talloc_get_type_abort(instance, proto_vmps_udp_t);
+	proto_radius_tcp_t	*inst = talloc_get_type_abort(instance, proto_radius_tcp_t);
 
 	if (inst->sockfd >= 0) close(inst->sockfd);
 	inst->sockfd = -1;
@@ -670,12 +644,12 @@ static int mod_detach(void *instance)
 }
 #endif
 
-extern fr_app_io_t proto_vmps_udp;
-fr_app_io_t proto_vmps_udp = {
+extern fr_app_io_t proto_radius_tcp;
+fr_app_io_t proto_radius_tcp = {
 	.magic			= RLM_MODULE_INIT,
-	.name			= "vmps_udp",
-	.config			= udp_listen_config,
-	.inst_size		= sizeof(proto_vmps_udp_t),
+	.name			= "radius_tcp",
+	.config			= tcp_listen_config,
+	.inst_size		= sizeof(proto_radius_tcp_t),
 //	.detach			= mod_detach,
 	.bootstrap		= mod_bootstrap,
 	.instantiate		= mod_instantiate,
@@ -688,6 +662,7 @@ fr_app_io_t proto_vmps_udp = {
 	.write			= mod_write,
 	.close			= mod_close,
 	.fd			= mod_fd,
+	.fd_set			= mod_fd_set,
 	.compare		= mod_compare,
 	.connection_set		= mod_connection_set,
 	.network_get		= mod_network_get,

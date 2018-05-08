@@ -119,8 +119,6 @@ static FR_NAME_NUMBER const dl_type_prefix[] = {
 	{  NULL , -1 },
 };
 
-static int dl_init(void);
-
 static int dl_symbol_init_cmp(void const *one, void const *two)
 {
 	dl_symbol_init_t const *a = one, *b = two;
@@ -284,22 +282,20 @@ static int dl_symbol_init_walk(dl_t const *dl_module)
 	dl_symbol_init_t	*init;
 	fr_cursor_t		cursor;
 	void			*sym = NULL;
+	char			buffer[256];
 
 	for (init = fr_cursor_init(&cursor, &dl->sym_init);
 	     init;
 	     init = fr_cursor_next(&cursor)) {
 		if (init->symbol) {
-			char *sym_name = NULL;
+			snprintf(buffer, sizeof(buffer), "%s_%s", dl_module->name, init->symbol);
 
-			MEM(sym_name = talloc_typed_asprintf(NULL, "%s_%s", dl_module->name, init->symbol));
-			sym = dlsym(dl_module->handle, sym_name);
+			sym = dlsym(dl_module->handle, buffer);
 			if (!sym) {
-				DEBUG4("Symbol %s not found", sym_name);
-				talloc_free(sym_name);
+				DEBUG4("Symbol %s not found", buffer);
 				continue;
 			}
-			DEBUG3("Symbol %s found at %p", sym_name, sym);
-			talloc_free(sym_name);
+			DEBUG3("Symbol %s found at %p", buffer, sym);
 		}
 
 		if (init->func(dl_module, sym, init->ctx) < 0) return -1;
@@ -684,8 +680,6 @@ dl_t const *dl_module(CONF_SECTION *conf, dl_t const *parent, char const *name, 
 	char			*p, *q;
 	dl_common_t const	*module;
 
-	if (!dl) dl_init();
-
 	if (parent) {
 		module_name = talloc_typed_asprintf(NULL, "%s_%s_%s",
 						    fr_int2str(dl_type_prefix, parent->type, "<INVALID>"),
@@ -894,7 +888,7 @@ int dl_instance(TALLOC_CTX *ctx, dl_instance_t **out,
 /** Initialise structures needed by the dynamic linker
  *
  */
-static int dl_init(void)
+int dl_init(void)
 {
 	if (dl) return 0;
 
