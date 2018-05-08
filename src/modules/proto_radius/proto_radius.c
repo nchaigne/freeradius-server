@@ -73,6 +73,22 @@ static CONF_PARSER const proto_radius_config[] = {
 };
 
 
+static fr_dict_t const *dict_radius;
+
+extern fr_dict_autoload_t proto_radius_dict[];
+fr_dict_autoload_t proto_radius_dict[] = {
+	{ .out = &dict_radius, .proto = "radius" },
+	{ NULL }
+};
+
+static fr_dict_attr_t const *attr_user_name;
+
+extern fr_dict_attr_autoload_t proto_radius_dict_attr[];
+fr_dict_attr_autoload_t proto_radius_dict_attr[] = {
+	{ .out = &attr_user_name, .name = "User-Name", .type = FR_TYPE_STRING, .dict = &dict_radius},
+	{ NULL }
+};
+
 /*
  *	Allow configurable priorities for each listener.
  */
@@ -888,7 +904,6 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	if (!inst->code_allowed[FR_CODE_ACCESS_REQUEST]) {
 		inst->io.cleanup_delay.tv_sec = 0;
 		inst->io.cleanup_delay.tv_usec = 0;
-		WARN("proto_radius - setting 'cleanup_delay = 0' as this listener does not receive Access-Request packets");
 	}
 
 	/*
