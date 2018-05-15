@@ -132,7 +132,7 @@ void fr_cursor_free_list(fr_cursor_t *cursor) CC_HINT(nonnull);
  *	- The first item in the list.
  */
 #define fr_cursor_init(_cursor, _head) \
-	_fr_cursor_init(_cursor, (void **)_head, offsetof(__typeof__(**(_head)), next), NULL, NULL, NULL)
+	_fr_cursor_init(_cursor, (void * const *)_head, offsetof(__typeof__(**(_head)), next), NULL, NULL, NULL)
 
 void *_fr_cursor_init(fr_cursor_t *cursor, void * const *head, size_t offset,
 		      fr_cursor_iter_t iter, void const *ctx, char const *type);

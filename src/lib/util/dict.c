@@ -3105,26 +3105,17 @@ fr_dict_attr_t const *fr_dict_vendor_attr_by_da(fr_dict_attr_t const *da)
 
 /** Return vendor attribute for the specified dictionary and pen
  *
- * @param[in] dict		to search for the vendor in.
  * @param[in] vendor_root	of the vendor root attribute.  Could be 26 (for example) in RADIUS.
  * @param[in] vendor_pen	to find.
  * @return
  *	- NULL if vendor does not exist.
  *	- A fr_dict_attr_t representing the vendor in the dictionary hierarchy.
  */
-fr_dict_attr_t const *fr_dict_vendor_attr_by_num(fr_dict_t const *dict, unsigned int vendor_root, uint32_t vendor_pen)
+fr_dict_attr_t const *fr_dict_vendor_attr_by_num(fr_dict_attr_t const *vendor_root, uint32_t vendor_pen)
 {
-	fr_dict_attr_t const *da;
+	fr_dict_attr_t const *vendor;
 
-	if (!dict) return NULL;
-
-	da = fr_dict_attr_child_by_num(fr_dict_root(dict), vendor_root);
-	if (!da) {
-		fr_strerror_printf("Vendor root attribute %i not defined in dict %s", vendor_root, dict->root->name);
-		return NULL;
-	}
-
-	switch (da->type) {
+	switch (vendor_root->type) {
 	case FR_TYPE_VSA:	/* Vendor specific attribute */
 	case FR_TYPE_EVS:	/* Extended vendor specific attribute */
 		break;
@@ -3133,24 +3124,24 @@ fr_dict_attr_t const *fr_dict_vendor_attr_by_num(fr_dict_t const *dict, unsigned
 		fr_strerror_printf("Wrong type for vendor root, expected '%s' or '%s' got '%s'",
 				   fr_int2str(dict_attr_types, FR_TYPE_VSA, "<INVALID>"),
 				   fr_int2str(dict_attr_types, FR_TYPE_EVS, "<INVALID>"),
-				   fr_int2str(dict_attr_types, da->type, "<INVALID>"));
+				   fr_int2str(dict_attr_types, vendor_root->type, "<INVALID>"));
 		return NULL;
 	}
 
-	da = fr_dict_attr_child_by_num(da, vendor_pen);
-	if (!da) {
+	vendor = fr_dict_attr_child_by_num(vendor_root, vendor_pen);
+	if (!vendor) {
 		fr_strerror_printf("Vendor %i not defined", vendor_pen);
 		return NULL;
 	}
 
-	if (da->type != FR_TYPE_VENDOR) {
+	if (vendor->type != FR_TYPE_VENDOR) {
 		fr_strerror_printf("Wrong type for vendor, expected '%s' got '%s'",
-				   fr_int2str(dict_attr_types, da->type, "<INVALID>"),
+				   fr_int2str(dict_attr_types, vendor->type, "<INVALID>"),
 				   fr_int2str(dict_attr_types, FR_TYPE_VENDOR, "<INVALID>"));
 		return NULL;
 	}
 
-	return da;
+	return vendor;
 }
 
 /** Look up a dictionary attribute by a name embedded in another string
@@ -4899,14 +4890,18 @@ int fr_dict_from_file(TALLOC_CTX *ctx, fr_dict_t **out, char const *dir, char co
 	static bool	defined_cast_types;
 	fr_dict_t	*dict;
 
+	/*
+	 *	If we've already loaded the dictionary, increase the reference count
+	 *	so the resolve/free pairs match up.
+	 */
+	if (fr_dict_internal) {
+		*out = fr_dict_internal;
+		talloc_increase_ref_count(*out);
+		return 0;
+	}
+
 	dict = dict_alloc(ctx);
 	if (!dict) return -1;
-
-	/*
-	 *	Free the old dictionaries
-	 */
-	if (*out == fr_dict_internal) fr_dict_internal = dict;
-	TALLOC_FREE(*out);
 
 	/*
 	 *	Remove this at some point...
@@ -5261,7 +5256,7 @@ int fr_dict_attr_autoload(fr_dict_attr_autoload_t const *to_load)
 
 		da = fr_dict_attr_by_name(*p->dict, p->name);
 		if (!da) {
-			fr_strerror_printf("Attribute \"%s\" not found in %s dictionary", p->name,
+			fr_strerror_printf("Attribute \"%s\" not found in \"%s\" dictionary", p->name,
 					   *p->dict ? (*p->dict)->root->name : "internal");
 			return -1;
 		}
@@ -5308,7 +5303,21 @@ int fr_dict_autoload(char const *dir, fr_dict_autoload_t const *to_load)
 			return -1;
 		}
 
-		if (fr_dict_protocol_afrom_file(NULL, &dict, my_dir, p->proto) < 0) return -1;
+		/*
+		 *	Load the internal dictionary
+		 */
+		if (strcmp(p->proto, "freeradius") == 0) {
+			if (fr_dict_from_file(NULL, &dict, my_dir, FR_DICTIONARY_FILE, "radius") < 0) return -1;
+		} else {
+			/*
+			 *	FIXME - Temporarily disabled
+			 */
+#if 0
+			if (fr_dict_protocol_afrom_file(NULL, &dict, my_dir, p->proto) < 0) return -1;
+#else
+			continue;
+#endif
+		}
 
 		if (p->out) *(p->out) = dict;
 	}

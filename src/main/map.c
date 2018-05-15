@@ -2036,7 +2036,7 @@ int map_to_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, vp_map_t cons
 		}
 		if (!from) return 0;
 
-		found = fr_pair_list_copy(ctx, *from);
+		if (fr_pair_list_copy(ctx, &found, *from) < 0) return -1;
 
 		/*
 		 *	List to list copy is empty if the src list has no attributes.
@@ -2491,8 +2491,8 @@ int map_to_request(REQUEST *request, vp_map_t const *map, radius_map_getvalue_t 
 		 *	Wildcard: delete all of the matching ones, based on tag.
 		 */
 		if (map->lhs->tmpl_num == NUM_ANY) {
-			fr_pair_delete_by_num(list, fr_dict_vendor_num_by_da(map->lhs->tmpl_da), map->lhs->tmpl_da->attr,
-					      map->lhs->tmpl_tag);
+			fr_pair_delete_by_child_num(list, map->lhs->tmpl_da->parent,
+						    map->lhs->tmpl_da->attr, map->lhs->tmpl_tag);
 			dst = NULL;
 		/*
 		 *	We've found the Nth one.  Delete it, and only it.

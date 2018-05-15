@@ -644,8 +644,7 @@ void mschap_add_reply(REQUEST *request, uint8_t ident,
 {
 	VALUE_PAIR *vp;
 
-	MEM(vp = pair_update_reply(da, 0));
-
+	MEM(pair_update_reply(&vp, da) >= 0);
 	if (vp->vp_type == FR_TYPE_STRING) {
 		char *p;
 
@@ -671,8 +670,7 @@ static void mppe_add_reply(REQUEST *request, fr_dict_attr_t const *da, uint8_t c
 {
 	VALUE_PAIR *vp;
 
-	MEM(vp = pair_update_reply(da, 0));
-
+	MEM(pair_update_reply(&vp, da) >= 0);
 	fr_pair_value_memcpy(vp, value, len);
 }
 
@@ -896,6 +894,7 @@ ntlm_auth_err:
 		char result[253];
 		uint8_t nt_pass_decrypted[516], old_nt_hash_expected[NT_DIGEST_LENGTH];
 		RC4_KEY key;
+		size_t len = 0;
 
 		if (!nt_password) {
 			RDEBUG("Local MS-CHAPv2 password change requires NT-Password attribute");
@@ -940,9 +939,8 @@ ntlm_auth_err:
 		 *  The new NT hash - this should be preferred over the
 		 *  cleartext password as it avoids unicode hassles.
 		 */
-
-		new_hash = pair_update_request(attr_ms_chap_new_nt_password, 0);
-		q = talloc_array(new_hash, uint8_t, NT_DIGEST_LENGTH);
+		MEM(pair_update_request(&new_hash, attr_ms_chap_new_nt_password) >= 0);
+		MEM(q = talloc_array(new_hash, uint8_t, NT_DIGEST_LENGTH));
 		fr_pair_value_memsteal(new_hash, q);
 		fr_md4_calc(q, p, passlen);
 
@@ -963,10 +961,11 @@ ntlm_auth_err:
 		 *
 		 *  First pass: get the length of the converted string.
 		 */
-		new_pass = pair_update_request(attr_ms_chap_new_cleartext_password, 0);
+		MEM(pair_update_request(&new_pass, attr_ms_chap_new_cleartext_password) >= 0);
 		new_pass->vp_length = 0;
 
 		i = 0;
+		len = 0;
 		while (i < passlen) {
 			int c;
 
@@ -977,15 +976,15 @@ ntlm_auth_err:
 			 *  Gah. nasty. maybe we should just pull in iconv?
 			 */
 			if (c < 0x7f) {
-				new_pass->vp_length++;
+				len++;
 			} else if (c < 0x7ff) {
-				new_pass->vp_length += 2;
+				len += 2;
 			} else {
-				new_pass->vp_length += 3;
+				len += 3;
 			}
 		}
 
-		new_pass->vp_strvalue = x = talloc_array(new_pass, char, new_pass->vp_length + 1);
+		MEM(x = talloc_array(new_pass, char, len + 1));
 
 		/*
 		 *	Second pass: convert the characters from UTF-16 to UTF-8.
@@ -1015,6 +1014,7 @@ ntlm_auth_err:
 		}
 
 		*x = '\0';
+		fr_pair_value_strsteal(new_pass, x);
 
 		/* Perform the xlat */
 		result_len = xlat_eval(result, sizeof(result), request, inst->local_cpw, NULL, NULL);
@@ -1339,8 +1339,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, UNUSED void *t
 	 *	NT/LM passwords.
 	 */
 	RDEBUG2("Found MS-CHAP attributes.  Setting 'Auth-Type = %s'", inst->auth_type->alias);
-	MEM(vp = pair_add_control(attr_auth_type, 0));
-	fr_value_box_copy(vp, &vp->data, inst->auth_type->value);
+	MEM(pair_add_control(&vp, attr_auth_type) >= 0);
+	MEM(fr_value_box_copy(vp, &vp->data, inst->auth_type->value) == 0);
 	vp->data.enumv = vp->da;
 
 	return RLM_MODULE_OK;
@@ -1479,8 +1479,8 @@ static bool CC_HINT(nonnull (1, 2, 4)) find_nt_password(rlm_mschap_t const *inst
 
 		if (password) {
 			RDEBUG2("Found Cleartext-Password, hashing to create NT-Password");
-			MEM(nt_password = pair_update_control(attr_nt_password, 0));
-			p = talloc_array(nt_password, uint8_t, NT_DIGEST_LENGTH);
+			MEM(pair_update_control(&nt_password, attr_nt_password) >= 0);
+			MEM(p = talloc_array(nt_password, uint8_t, NT_DIGEST_LENGTH));
 			fr_pair_value_memsteal(nt_password, p);
 
 			if (mschap_ntpwdhash(p, password->vp_strvalue) < 0) {
@@ -1542,8 +1542,8 @@ static bool CC_HINT(nonnull (1, 2, 5)) find_lm_password(rlm_mschap_t const *inst
 		if (password) {
 			RDEBUG2("Found Cleartext-Password, hashing to create LM-Password");
 
-			MEM(lm_password = pair_update_control(attr_lm_password, 0));
-			p = talloc_array(lm_password, uint8_t, LM_DIGEST_LENGTH);
+			MEM(pair_update_control(&lm_password, attr_lm_password) >= 0);
+			MEM(p = talloc_array(lm_password, uint8_t, LM_DIGEST_LENGTH));
 			fr_pair_value_memsteal(lm_password, p);
 			smbdes_lmpwdhash(password->vp_strvalue, p);
 
@@ -1743,7 +1743,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED void
 	if (!smb_ctrl) {
 		password = fr_pair_find_by_da(request->control, attr_smb_account_ctrl_text, TAG_ANY);
 		if (password) {
-			MEM(smb_ctrl = pair_add_control(attr_smb_account_ctrl, 0));
+			MEM(pair_add_control(&smb_ctrl, attr_smb_account_ctrl) >= 0);
 			smb_ctrl->vp_uint32 = pdb_decode_acct_ctrl(password->vp_strvalue);
 		}
 	}
@@ -1809,8 +1809,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED void
 		 *	password change, add them into the request and then
 		 *	continue with the authentication.
 		 */
-		MEM(response = pair_update_request(attr_ms_chap2_response, 0));
-		p = talloc_array(response, uint8_t, 50);
+		MEM(pair_update_request(&response, attr_ms_chap2_response) >= 0);
+		MEM(p = talloc_array(response, uint8_t, 50));
 
 		/* ident & flags */
 		p[0] = cpw->vp_octets[1];
@@ -2060,10 +2060,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED void
 			break;
 		}
 
-		MEM(vp = pair_update_reply(attr_ms_mppe_encryption_policy, 0));
+		MEM(pair_update_reply(&vp, attr_ms_mppe_encryption_policy) >= 0);
 		vp->vp_uint32 = inst->require_encryption ? 2 : 1;
 
-		MEM(vp = pair_update_reply(attr_ms_mppe_encryption_types, 0));
+		MEM(pair_update_reply(&vp, attr_ms_mppe_encryption_types) >= 0);
 		vp->vp_uint32 = inst->require_strong ? 4 : 6;
 	} /* else we weren't asked to use MPPE */
 

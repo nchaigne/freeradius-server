@@ -40,28 +40,23 @@ extern "C" {
 #define DHCP_VEND_LEN	(308)
 #define DHCP_OPTION_MAGIC_NUMBER (0x63825363)
 
-/*
- *	This is a horrible hack.
- */
-#define FR_DHCP_OFFSET		(1024)
-
 typedef enum {
-	FR_DHCP_DISCOVER = (FR_DHCP_OFFSET + 1),
-	FR_DHCP_OFFER =	(FR_DHCP_OFFSET + 2),
-	FR_DHCP_REQUEST	= (FR_DHCP_OFFSET+ 3),
-	FR_DHCP_DECLINE	= (FR_DHCP_OFFSET + 4),
-	FR_DHCP_ACK = (FR_DHCP_OFFSET + 5),
-	FR_DHCP_NAK = (FR_DHCP_OFFSET + 6),
-	FR_DHCP_RELEASE = (FR_DHCP_OFFSET + 7),
-	FR_DHCP_INFORM = (FR_DHCP_OFFSET + 8),
-	FR_DHCP_FORCE_RENEW = (FR_DHCP_OFFSET + 9),
-	FR_DHCP_LEASE_QUERY = (FR_DHCP_OFFSET + 10),
-	FR_DHCP_LEASE_UNASSIGNED = (FR_DHCP_OFFSET + 11),
-	FR_DHCP_LEASE_UNKNOWN = (FR_DHCP_OFFSET + 12),
-	FR_DHCP_LEASE_ACTIVE = (FR_DHCP_OFFSET + 13),
-	FR_DHCP_BULK_LEASE_QUERY = (FR_DHCP_OFFSET + 14),
-	FR_DHCP_LEASE_QUERY_DONE = (FR_DHCP_OFFSET + 15),
-	FR_DHCP_MAX = (FR_DHCP_OFFSET + 16)
+	FR_DHCP_DISCOVER = (1),
+	FR_DHCP_OFFER =	(2),
+	FR_DHCP_REQUEST	= (3),
+	FR_DHCP_DECLINE	= (4),
+	FR_DHCP_ACK = (5),
+	FR_DHCP_NAK = (6),
+	FR_DHCP_RELEASE = (7),
+	FR_DHCP_INFORM = (8),
+	FR_DHCP_FORCE_RENEW = (9),
+	FR_DHCP_LEASE_QUERY = (10),
+	FR_DHCP_LEASE_UNASSIGNED = (11),
+	FR_DHCP_LEASE_UNKNOWN = (12),
+	FR_DHCP_LEASE_ACTIVE = (13),
+	FR_DHCP_BULK_LEASE_QUERY = (14),
+	FR_DHCP_LEASE_QUERY_DONE = (15),
+	FR_DHCP_MAX = (16)
 } fr_dhcpv4_codes_t;
 
 typedef struct dhcp_packet_t {
@@ -147,9 +142,9 @@ int fr_dhcpv4_udp_packet_send(RADIUS_PACKET *packet);
  */
 int8_t		fr_dhcpv4_attr_cmp(void const *a, void const *b);
 
-RADIUS_PACKET	*fr_dhcpv4_packet_ok(uint8_t const *data, ssize_t data_len, fr_ipaddr_t src_ipaddr,
-				     uint16_t src_port, fr_ipaddr_t dst_ipaddr, uint16_t dst_port);
-
+bool		fr_dhcpv4_ok(uint8_t const *data, ssize_t data_len, uint8_t *message_type, uint32_t *xid);
+RADIUS_PACKET	*fr_dhcpv4_packet_alloc(uint8_t const *data, ssize_t data_len);
+ssize_t		fr_dhcpv4_encode(uint8_t *buffer, size_t buflen, int code, uint32_t xid, VALUE_PAIR *vps);
 int		fr_dhcpv4_init(void);
 
 /*

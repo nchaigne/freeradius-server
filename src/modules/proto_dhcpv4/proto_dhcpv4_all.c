@@ -16,8 +16,8 @@
 
 /**
  * $Id$
- * @file proto_vmps/proto_vmps_all.c
- * @brief VMPS processing.
+ * @file proto_dhcpv4/proto_dhcpv4_all.c
+ * @brief DHCPV4 processing.
  *
  * @copyright 2018 The Freeradius server project.
  * @copyright 2018 Alan DeKok (aland@deployingradius.com)
@@ -28,7 +28,8 @@
 #include <freeradius-devel/unlang.h>
 #include <freeradius-devel/dict.h>
 #include <freeradius-devel/rad_assert.h>
-#include "vqp.h"
+#include <freeradius-devel/dhcpv4/dhcpv4.h>
+#include <freeradius-devel/dhcpv4.h>
 
 static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 {
@@ -42,23 +43,23 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 	switch (request->request_state) {
 	case REQUEST_INIT:
 		radlog_request(L_DBG, L_DBG_LVL_1, request, "Received %s ID %08x",
-			       fr_vmps_codes[request->packet->code], request->packet->id);
+			       dhcp_message_types[request->packet->code], request->packet->id);
 		rdebug_proto_pair_list(L_DBG_LVL_1, request, request->packet->vps, "");
 
-		request->component = "vmps";
+		request->component = "dhcpv4";
 
-		da = fr_dict_attr_by_num(NULL, 0, FR_VMPS_PACKET_TYPE);
+		da = fr_dict_attr_by_num(NULL, 0, FR_DHCP_MESSAGE_TYPE);
 		rad_assert(da != NULL);
 		dv = fr_dict_enum_by_value(da, fr_box_uint32(request->packet->code));
 		if (!dv) {
-			REDEBUG("Failed to find value for &request:VMPS-Packet-Type");
+			REDEBUG("Failed to find value for &request:DHCP-Message-Type");
 			return FR_IO_FAIL;
 		}
 
 		unlang = cf_section_find(request->server_cs, "recv", dv->alias);
 		if (!unlang) {
 			RWDEBUG("Failed to find 'recv %s' section", dv->alias);
-			request->reply->code = FR_VMPS_PACKET_TYPE_VALUE_DO_NOT_RESPOND;
+			request->reply->code = FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND;
 			goto send_reply;
 		}
 
@@ -81,14 +82,14 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 		case RLM_MODULE_NOOP:
 		case RLM_MODULE_OK:
 		case RLM_MODULE_UPDATED:
-			if (request->packet->code == FR_VMPS_PACKET_TYPE_VALUE_VMPS_JOIN_REQUEST) {
-				request->reply->code = FR_VMPS_PACKET_TYPE_VALUE_VMPS_JOIN_RESPONSE;
+			if (request->packet->code == FR_DHCP_DISCOVER) {
+				request->reply->code = FR_DHCP_OFFER;
 
-			} else if (request->packet->code == FR_VMPS_PACKET_TYPE_VALUE_VMPS_RECONFIRM_REQUEST) {
-				request->reply->code = FR_VMPS_PACKET_TYPE_VALUE_VMPS_RECONFIRM_RESPONSE;
+			} else if (request->packet->code == FR_DHCP_REQUEST) {
+				request->reply->code = FR_DHCP_ACK;
 
 			} else {
-				request->reply->code = FR_VMPS_PACKET_TYPE_VALUE_DO_NOT_RESPOND;
+				request->reply->code = FR_DHCP_NAK;
 			}
 			break;
 
@@ -96,11 +97,11 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 		case RLM_MODULE_REJECT:
 		case RLM_MODULE_FAIL:
 		case RLM_MODULE_HANDLED:
-			request->reply->code = FR_VMPS_PACKET_TYPE_VALUE_DO_NOT_RESPOND;
+			request->reply->code = FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND;
 			break;
 		}
 
-		if (!da) da = fr_dict_attr_by_num(NULL, 0, FR_VMPS_PACKET_TYPE);
+		if (!da) da = fr_dict_attr_by_num(NULL, 0, FR_DHCP_MESSAGE_TYPE);
 		rad_assert(da != NULL);
 
 		dv = fr_dict_enum_by_value(da, fr_box_uint32(request->reply->code));
@@ -138,14 +139,14 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 			 *	If we over-ride an ACK with a NAK, run
 			 *	the NAK section.
 			 */
-			if (request->reply->code != FR_VMPS_PACKET_TYPE_VALUE_DO_NOT_RESPOND) {
-				if (!da) da = fr_dict_attr_by_num(NULL, 0, FR_VMPS_PACKET_TYPE);
+			if (request->reply->code != FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND) {
+				if (!da) da = fr_dict_attr_by_num(NULL, 0, FR_DHCP_MESSAGE_TYPE);
 				rad_assert(da != NULL);
 
 				dv = fr_dict_enum_by_value(da, fr_box_uint32(request->reply->code));
 				RWDEBUG("Failed running 'send %s', trying 'send Do-Not-Respond'.", dv->alias);
 
-				request->reply->code = FR_VMPS_PACKET_TYPE_VALUE_DO_NOT_RESPOND;
+				request->reply->code = FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND;
 
 				dv = fr_dict_enum_by_value(da, fr_box_uint32(request->reply->code));
 				unlang = NULL;
@@ -163,24 +164,10 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 		/*
 		 *	Check for "do not respond".
 		 */
-		if (request->reply->code == FR_VMPS_PACKET_TYPE_VALUE_DO_NOT_RESPOND) {
+		if (request->reply->code == FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND) {
 			RDEBUG("Not sending reply to client.");
 			return FR_IO_DONE;
 		}
-
-#if 0
-#ifdef WITH_UDPFROMTO
-		/*
-		 *	Overwrite the src ip address on the outbound packet
-		 *	with the one specified by the client.
-		 *	This is useful to work around broken DSR implementations
-		 *	and other routing issues.
-		 */
-		if (request->client && (request->client->src_ipaddr.af != AF_UNSPEC)) {
-			request->reply->src_ipaddr = request->client->src_ipaddr;
-		}
-#endif
-#endif
 
 		if (RDEBUG_ENABLED) common_packet_debug(request, request->reply, false);
 		break;
@@ -193,9 +180,9 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 }
 
 
-extern fr_app_process_t proto_vmps_all;
-fr_app_process_t proto_vmps_all = {
+extern fr_app_process_t proto_dhcpv4_all;
+fr_app_process_t proto_dhcpv4_all = {
 	.magic		= RLM_MODULE_INIT,
-	.name		= "vmps_all",
+	.name		= "dhcpv4_all",
 	.process	= mod_process,
 };

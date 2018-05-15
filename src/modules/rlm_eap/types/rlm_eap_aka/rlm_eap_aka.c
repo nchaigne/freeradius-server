@@ -58,11 +58,13 @@ static CONF_PARSER submodule_config[] = {
 };
 
 static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 static fr_dict_t const *dict_eap_aka;
 
 extern fr_dict_autoload_t rlm_eap_aka_dict[];
 fr_dict_autoload_t rlm_eap_aka_dict[] = {
 	{ .out = &dict_freeradius, .proto = "freeradius" },
+	{ .out = &dict_radius, .proto = "radius" },
 	{ .out = &dict_eap_aka, .proto = "eap-aka" },
 	{ NULL }
 };
@@ -70,6 +72,9 @@ fr_dict_autoload_t rlm_eap_aka_dict[] = {
 static fr_dict_attr_t const *attr_eap_aka_root;
 static fr_dict_attr_t const *attr_eap_aka_subtype;
 static fr_dict_attr_t const *attr_sim_amf;
+
+static fr_dict_attr_t const *attr_ms_mppe_send_key;
+static fr_dict_attr_t const *attr_ms_mppe_recv_key;
 
 static fr_dict_attr_t const *attr_eap_aka_any_id_req;
 static fr_dict_attr_t const *attr_eap_aka_autn;
@@ -93,6 +98,9 @@ fr_dict_attr_autoload_t rlm_eap_aka_dict_attr[] = {
 	{ .out = &attr_eap_aka_root, .name = "EAP-AKA-Root", .type = FR_TYPE_TLV, .dict = &dict_freeradius },
 	{ .out = &attr_eap_aka_subtype, .name = "EAP-AKA-Subtype", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
 	{ .out = &attr_sim_amf, .name = "SIM-AMF", .type = FR_TYPE_OCTETS, .dict = &dict_freeradius },
+
+	{ .out = &attr_ms_mppe_send_key, .name = "MS-MPPE-Send-Key", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
+	{ .out = &attr_ms_mppe_recv_key, .name = "MS-MPPE-Recv-Key", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
 
 	{ .out = &attr_eap_aka_any_id_req, .name = "EAP-AKA-Any-ID-Req", .type = FR_TYPE_BOOL, .dict = &dict_eap_aka },
 	{ .out = &attr_eap_aka_autn, .name = "EAP-AKA-AUTN", .type = FR_TYPE_OCTETS, .dict = &dict_eap_aka },
@@ -314,7 +322,7 @@ static int eap_aka_send_challenge(eap_session_t *eap_session)
 	if (eap_aka_session->type == FR_EAP_AKA_PRIME) {
 		uint8_t	amf_buff[2] = { 0x80, 0x00 };	/* Set the AMF separation bit high */
 
-		MEM(vp = pair_update_control(attr_sim_amf, 0));
+		MEM(pair_update_control(&vp, attr_sim_amf) >= 0);
 		fr_pair_value_memcpy(vp, amf_buff, sizeof(amf_buff));
 	}
 
@@ -330,7 +338,7 @@ static int eap_aka_send_challenge(eap_session_t *eap_session)
 	/*
 	 *	Don't leave the AMF hanging around
 	 */
-	if (eap_aka_session->type == FR_EAP_AKA_PRIME) fr_pair_delete_by_da(&request->control, attr_sim_amf, TAG_ANY);
+	if (eap_aka_session->type == FR_EAP_AKA_PRIME) pair_delete_control(attr_sim_amf);
 
 	/*
 	 *	All set, calculate keys!

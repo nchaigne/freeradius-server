@@ -195,17 +195,22 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, UNUSED void *t
 	 */
 	RDEBUG("Login within allowed time-slot, %d seconds left in this session", left);
 
-	MEM(vp = pair_update_reply(attr_session_timeout, TAG_ANY));
-	vp = fr_pair_find_by_da(request->reply->vps, attr_session_timeout, TAG_ANY);
-	if (vp) {	/* just update... */
+	switch (pair_update_reply(&vp, attr_session_timeout)) {
+	case 1:
+		/* just update... */
 		if (vp->vp_uint32 > (uint32_t)left) {
 			vp->vp_uint32 = (uint32_t)left;
-			RDEBUG("&reply:Session-vp := %pV", &vp->data);
+			RDEBUG("&reply:Session-Timeout := %pV", &vp->data);
 		}
-	} else {
-		vp = pair_add_reply(attr_session_timeout, 0);
+		break;
+
+	case 0:	/* no pre-existing */
 		vp->vp_uint32 = (uint32_t)left;
-		RDEBUG("&reply:Session-vp := %pV", &vp->data);
+		RDEBUG("&reply:Session-Timeout := %pV", &vp->data);
+		break;
+
+	case -1: /* malloc failure */
+		MEM(NULL);
 	}
 
 	return RLM_MODULE_OK;
