@@ -535,7 +535,7 @@ rlm_rcode_t rad_virtual_server(REQUEST *request)
 	VALUE_PAIR *vp;
 
 	RDEBUG("Virtual server %s received request", cf_section_name2(request->server_cs));
-	rdebug_pair_list(L_DBG_LVL_1, request, request->packet->vps, NULL);
+	log_request_pair_list(L_DBG_LVL_1, request, request->packet->vps, NULL);
 
 	if (!request->username) {
 		request->username = fr_pair_find_by_num(request->packet->vps, 0, FR_USER_NAME, TAG_ANY);
@@ -662,7 +662,7 @@ skip:
 	RDEBUG("} # server %s", cf_section_name2(request->server_cs));
 
 	RDEBUG("Virtual server sending reply");
-	rdebug_pair_list(L_DBG_LVL_1, request, request->reply->vps, NULL);
+	log_request_pair_list(L_DBG_LVL_1, request, request->reply->vps, NULL);
 
 	return rcode;
 }
@@ -684,7 +684,7 @@ void common_packet_debug(REQUEST *request, RADIUS_PACKET *packet, bool received)
 	if (!RDEBUG_ENABLED) return;
 
 
-	radlog_request(L_DBG, L_DBG_LVL_1, request, "%s code %u Id %i from %s%s%s:%i to %s%s%s:%i "
+	log_request(L_DBG, L_DBG_LVL_1, request, "%s code %u Id %i from %s%s%s:%i to %s%s%s:%i "
 #if defined(WITH_UDPFROMTO) && defined(WITH_IFINDEX_NAME_RESOLUTION)
 		       "%s%s%s"
 #endif
@@ -708,8 +708,8 @@ void common_packet_debug(REQUEST *request, RADIUS_PACKET *packet, bool received)
 		       packet->data_len);
 
 	if (received) {
-		rdebug_pair_list(L_DBG_LVL_1, request, packet->vps, NULL);
+		log_request_pair_list(L_DBG_LVL_1, request, packet->vps, NULL);
 	} else {
-		rdebug_proto_pair_list(L_DBG_LVL_1, request, packet->vps, NULL);
+		log_request_proto_pair_list(L_DBG_LVL_1, request, packet->vps, NULL);
 	}
 }

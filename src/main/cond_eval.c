@@ -231,9 +231,9 @@ static void cond_print_operands(fr_value_box_t const *lhs, fr_value_box_t const 
 {
 	if (lhs) {
 		if (lhs->type == FR_TYPE_STRING) {
-			EVAL_DEBUG("LHS: \"%s\" (%zu)" , lhs->vb_strvalue, lhs->datum.length);
+			EVAL_DEBUG("LHS: \"%pV\" (%zu)" , &lhs->datum, lhs->datum.length);
 		} else {
-			EVAL_DEBUG("LHS: 0x%pH (%zu)", lhs->vb_octets, lhs->datum.length);
+			EVAL_DEBUG("LHS: 0x%pH (%zu)", &lhs->datum, lhs->datum.length);
 		}
 	} else {
 		EVAL_DEBUG("LHS: VIRTUAL");
@@ -241,9 +241,9 @@ static void cond_print_operands(fr_value_box_t const *lhs, fr_value_box_t const 
 
 	if (rhs) {
 		if (rhs->type == FR_TYPE_STRING) {
-			EVAL_DEBUG("RHS: \"%s\" (%zu)", rhs->vb_strvalue, rhs->datum.length);
+			EVAL_DEBUG("RHS: \"%pV\" (%zu)", &rhs->datum, rhs->datum.length);
 		} else {
-			EVAL_DEBUG("RHS: 0x%pH (%zu)", rhs->vb_octets, rhs->datum.length);
+			EVAL_DEBUG("RHS: 0x%pH (%zu)", &rhs->datum, rhs->datum.length);
 		}
 	} else {
 		EVAL_DEBUG("RHS: COMPILED");
@@ -294,7 +294,7 @@ static int cond_cmp_values(REQUEST *request, fr_cond_t const *c, fr_value_box_t 
 
 		fr_value_box_copy(vp, &vp->data, rhs);
 
-		rcode = paircompare(request, request->packet->vps, vp, NULL);
+		rcode = paircmp(request, request->packet->vps, vp, NULL);
 		rcode = (rcode == 0) ? 1 : 0;
 		talloc_free(vp);
 		goto finish;
@@ -435,7 +435,7 @@ do {\
 	if (c->pass2_fixup == PASS2_PAIRCOMPARE) {
 		rad_assert(!c->cast);
 		rad_assert(map->lhs->type == TMPL_TYPE_ATTR);
-		rad_assert((map->rhs->type != TMPL_TYPE_ATTR) || !radius_find_compare(map->rhs->tmpl_da)); /* expensive assert */
+		rad_assert((map->rhs->type != TMPL_TYPE_ATTR) || !paircmp_find(map->rhs->tmpl_da)); /* expensive assert */
 
 		cast = map->lhs->tmpl_da;
 
@@ -515,6 +515,8 @@ do {\
 	{
 		ssize_t ret;
 		fr_value_box_t data;
+
+		memset(&data, 0, sizeof(data));
 
 		if (map->rhs->type != TMPL_TYPE_UNPARSED) {
 			char *p;
@@ -609,12 +611,12 @@ int cond_eval_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth, fr_c
 		VALUE_PAIR *vp;
 		fr_cursor_t cursor;
 		/*
-		 *	Legacy paircompare call, skip processing the magic attribute
+		 *	Legacy paircmp call, skip processing the magic attribute
 		 *	if it's the LHS and cast RHS to the same type.
 		 */
 		if ((c->pass2_fixup == PASS2_PAIRCOMPARE) && (map->op != T_OP_REG_EQ)) {
 #ifndef NDEBUG
-			rad_assert(radius_find_compare(map->lhs->tmpl_da)); /* expensive assert */
+			rad_assert(paircmp_find(map->lhs->tmpl_da)); /* expensive assert */
 #endif
 			rcode = cond_normalise_and_cmp(request, c, NULL);
 			break;
@@ -845,7 +847,7 @@ void radius_pairmove(REQUEST *request, VALUE_PAIR **to, VALUE_PAIR *from, bool d
 
 		RDEBUG4("::: Examining %s", from_list[i]->da->name);
 
-		if (do_xlat) xlat_eval_do(request, from_list[i]);
+		if (do_xlat) xlat_eval_pair(request, from_list[i]);
 
 		/*
 		 *	Attribute should be appended, OR the "to" list
@@ -925,7 +927,7 @@ void radius_pairmove(REQUEST *request, VALUE_PAIR **to, VALUE_PAIR *from, bool d
 				 *	If equal, delete the one in
 				 *	the "to" list.
 				 */
-				rcode = radius_compare_vps(NULL, from_list[i],
+				rcode = paircmp_pairs(NULL, from_list[i],
 							   to_list[j]);
 				/*
 				 *	We may want to do more

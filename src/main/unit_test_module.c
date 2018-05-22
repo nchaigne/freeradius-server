@@ -31,9 +31,10 @@ RCSID("$Id$")
 #include <freeradius-devel/map_proc.h>
 #include <freeradius-devel/state.h>
 #include <freeradius-devel/rad_assert.h>
+#include <freeradius-devel/tls/tls.h>
 
 #ifdef HAVE_GETOPT_H
-#	include <getopt.h>
+#  include <getopt.h>
 #endif
 
 #include <ctype.h>
@@ -42,7 +43,7 @@ RCSID("$Id$")
  *  Global variables.
  */
 char const *radacct_dir = NULL;
-char const *radlog_dir = NULL;
+char const *log_dir = NULL;
 bool log_stripped_names = false;
 
 static bool filedone = false;
@@ -380,7 +381,7 @@ static REQUEST *request_from_file(FILE *fp, fr_event_list_t *el, RADCLIENT *clie
 	 *	Debugging
 	 */
 	request->log.dst = talloc_zero(request, log_dst_t);
-	request->log.dst->func = vradlog_request;
+	request->log.dst->func = vlog_request;
 	request->log.dst->uctx = &default_log;
 
 	request->log.lvl = rad_debug_lvl;
@@ -569,7 +570,7 @@ static bool do_xlats(char const *filename, FILE *fp)
 	gettimeofday(&now, NULL);
 
 	request->log.dst = talloc_zero(request, log_dst_t);
-	request->log.dst->func = vradlog_request;
+	request->log.dst->func = vlog_request;
 	request->log.dst->uctx = &default_log;
 
 	request->log.lvl = rad_debug_lvl;
@@ -741,7 +742,7 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'D':
-				main_config.dictionary_dir = talloc_typed_strdup(NULL, optarg);
+				main_config.dict_dir = talloc_typed_strdup(NULL, optarg);
 				break;
 
 			case 'f':
@@ -797,6 +798,8 @@ int main(int argc, char *argv[])
 	if (rad_debug_lvl) dependency_version_print();
 	fr_debug_lvl = rad_debug_lvl;
 
+	if (log_init(&default_log, false, main_config.dict_dir) < 0) exit(EXIT_FAILURE);
+
 	/*
 	 *	Mismatch between the binary and the libraries it depends on
 	 */
@@ -807,7 +810,7 @@ int main(int argc, char *argv[])
 
 	dl_init();
 
-	if (fr_dict_autoload(main_config.dictionary_dir, unit_test_module_dict) < 0) {
+	if (fr_dict_autoload(main_config.dict_dir, unit_test_module_dict) < 0) {
 		fr_perror("%s", main_config.name);
 		rcode = EXIT_FAILURE;
 		goto finish;
@@ -822,7 +825,7 @@ int main(int argc, char *argv[])
 	 *  Initialising OpenSSL once, here, is safer than having individual modules do it.
 	 */
 #ifdef HAVE_OPENSSL_CRYPTO_H
-	if (tls_global_init(main_config.dictionary_dir) < 0) {
+	if (tls_global_init(main_config.dict_dir) < 0) {
 		rcode = EXIT_FAILURE;
 		goto finish;
 	}
@@ -919,6 +922,11 @@ int main(int argc, char *argv[])
 	 *	Call xlat instantiation functions (after the xlats have been compiled)
 	 */
 	if (xlat_instantiate() < 0) exit(EXIT_FAILURE);
+
+	/*
+	 *	Instantiate "permanent" paircmps
+	 */
+	if (paircmp_init(main_config.dict_dir) < 0) exit(EXIT_FAILURE);
 
 	/*
 	 *	Simulate thread specific instantiation
@@ -1065,7 +1073,7 @@ int main(int argc, char *argv[])
 	unlang = cf_section_find(request->server_cs, "authenticate", auth_type);
 	talloc_free(auth_type);
 	if (!unlang) {
-		REDEBUG("Failed to find 'recv %s' section", auth_type);
+		REDEBUG("Failed to find 'recv %pV' section", &vp->data);
 		request->reply->code = FR_CODE_ACCESS_REJECT;
 		goto done;
 	}
@@ -1132,6 +1140,11 @@ finish:
 	talloc_free(el);
 
 	/*
+	 *	Free request specific logging infrastructure
+	 */
+	log_free();
+
+	/*
 	 *	Free xlat instance data, and call any detach methods
 	 */
 	xlat_instances_free();
@@ -1142,9 +1155,14 @@ finish:
 	xlat_unregister("poke");
 
 	/*
-	 *	Detach modules, connection pools, registered xlats / paircompares / maps.
+	 *	Detach modules, connection pools, registered xlats / paircmps / maps.
 	 */
 	modules_free();
+
+	/*
+	 *	The only paircmps remaining are the ones registered by the server core.
+	 */
+	paircmp_free();
 
 	/*
 	 *	The only xlats remaining are the ones registered by the server core.

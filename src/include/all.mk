@@ -12,7 +12,7 @@
 #  The rest of the headers are static.
 #
 
-HEADERS_DY	:= attributes.h features.h missing.h radpaths.h tls.h
+HEADERS_DY	:= attributes.h features.h missing.h radpaths.h
 
 HEADERS	= \
 	build.h \
@@ -20,7 +20,6 @@ HEADERS	= \
 	event.h \
 	hash.h \
 	heap.h \
-	libradius.h \
 	md4.h \
 	md5.h \
 	modules.h \
@@ -120,10 +119,6 @@ src/include/missing.h: src/include/missing-h src/include/autoconf.sed
 	${Q}$(ECHO) HEADER $@
 	${Q}sed -f src/include/autoconf.sed < $< > $@
 
-src/include/tls.h: src/include/tls-h src/include/autoconf.sed
-	${Q}$(ECHO) HEADER $@
-	${Q}sed -f src/include/autoconf.sed < $< > $@
-
 src/include/radpaths.h: src/include/build-radpaths-h
 	${Q}$(ECHO) HEADER $@
 	${Q}cd src/include && /bin/sh build-radpaths-h
@@ -134,8 +129,6 @@ src/include/radpaths.h: src/include/build-radpaths-h
 src/freeradius-devel:
 	${Q}[ -e $@ ] || ln -s include $@
 	@echo LN-SF src/include src/freeradius-devel
-	${Q}[ -e src/include/io ] || ln -s ${top_srcdir}/src/lib/io ${top_srcdir}/src/include
-	@echo LN-SF src/include/io src/freeradius-devel/io
 
 #
 #  Ensure we set up the build environment

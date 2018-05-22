@@ -1299,7 +1299,7 @@ static unlang_action_t unlang_return(REQUEST *request,
 	RDEBUG2("%s", unlang_ops[instruction->type].name);
 
 	for (i = 8; i >= 0; i--) {
-		copy_p = request_data_get(request, (void *)radius_get_vp, i);
+		copy_p = request_data_get(request, (void *)xlat_fmt_get_vp, i);
 		if (copy_p) {
 			if (instruction->type == UNLANG_TYPE_BREAK) {
 				RDEBUG2("# break Foreach-Variable-%d", i);
@@ -1344,7 +1344,7 @@ static unlang_action_t unlang_foreach(REQUEST *request,
 		 *	FIXME: figure this out by walking up the modcall stack instead.
 		 */
 		for (i = 0; i < 8; i++) {
-			if (!request_data_reference(request, (void *)radius_get_vp, i)) {
+			if (!request_data_reference(request, (void *)xlat_fmt_get_vp, i)) {
 				foreach_depth = i;
 				break;
 			}
@@ -1410,7 +1410,7 @@ static unlang_action_t unlang_foreach(REQUEST *request,
 			 *	the xlat outside of a foreach loop and trigger a segv.
 			 */
 			fr_pair_list_free(&foreach->vps);
-			request_data_get(request, (void *)radius_get_vp, foreach->depth);
+			request_data_get(request, (void *)xlat_fmt_get_vp, foreach->depth);
 
 			*presult = frame->result;
 			if (*presult != RLM_MODULE_UNKNOWN) *priority = instruction->actions[*presult];
@@ -1422,13 +1422,8 @@ static unlang_action_t unlang_foreach(REQUEST *request,
 	}
 
 #ifndef NDEBUG
-	if (DEBUG_ENABLED2) {
-		char buffer[1024];
-
-			fr_pair_value_snprint(buffer, sizeof(buffer), vp, '"');
-			RDEBUG2("");
-			RDEBUG2("# looping with: Foreach-Variable-%d = %s", foreach->depth, buffer);
-		}
+	RDEBUG2("");
+	RDEBUG2("# looping with: Foreach-Variable-%d = %pV", foreach->depth, &vp->data);
 #endif
 
 	rad_assert(vp);
@@ -1438,7 +1433,7 @@ static unlang_action_t unlang_foreach(REQUEST *request,
 	 *	xlat.c, xlat_foreach() can find it.
 	 */
 	foreach->variable = vp;
-	request_data_add(request, (void *)radius_get_vp, foreach->depth, &foreach->variable,
+	request_data_add(request, (void *)xlat_fmt_get_vp, foreach->depth, &foreach->variable,
 			 false, false, false);
 
 	/*

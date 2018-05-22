@@ -780,7 +780,7 @@ static int sql_groupcmp(void *instance, REQUEST *request, UNUSED VALUE_PAIR *req
 	talloc_free(head);
 	fr_pool_connection_release(inst->pool, request, handle);
 
-	RDEBUG("sql_groupcmp finished: User is NOT a member of group %s", check->vp_strvalue);
+	RDEBUG("sql_groupcmp finished: User is NOT a member of group %pV", &check->data);
 
 	return 1;
 }
@@ -871,7 +871,7 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t const *inst, REQUEST *reques
 			 *	process the reply rows
 			 */
 			if ((rows > 0) &&
-			    (paircompare(request, request->packet->vps, check_tmp, &request->reply->vps) != 0)) {
+			    (paircmp(request, request->packet->vps, check_tmp, &request->reply->vps) != 0)) {
 				fr_pair_list_free(&check_tmp);
 				entry = entry->next;
 
@@ -891,7 +891,7 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t const *inst, REQUEST *reques
 			 	if (!fr_assignment_op[vp->op]) continue;
 
 				rcode = RLM_MODULE_UPDATED;
-			 	rdebug_pair(L_DBG_LVL_2, request, vp, NULL);
+			 	RDEBUG2("&%pP", vp);
 			}
 			REXDENT();
 			radius_pairmove(request, &request->control, check_tmp, true);
@@ -901,7 +901,7 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t const *inst, REQUEST *reques
 
 		if (inst->config->authorize_group_reply_query) {
 			/*
-			 *	Now get the reply pairs since the paircompare matched
+			 *	Now get the reply pairs since the paircmp matched
 			 */
 			if (xlat_aeval(request, &expanded, request, inst->config->authorize_group_reply_query,
 					 inst->sql_escape_func, *handle) < 0) {
@@ -929,7 +929,7 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t const *inst, REQUEST *reques
 			RDEBUG2("Group \"%s\": Merging reply items", entry->name);
 			if (rcode == RLM_MODULE_NOOP) rcode = RLM_MODULE_UPDATED;
 
-			rdebug_pair_list(L_DBG_LVL_2, request, reply_tmp, NULL);
+			log_request_pair_list(L_DBG_LVL_2, request, reply_tmp, NULL);
 
 			radius_pairmove(request, &request->reply->vps, reply_tmp, true);
 			reply_tmp = NULL;
@@ -1056,7 +1056,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 		/*
 		 *	Checks if attribute already exists.
 		 */
-		if (paircompare_register_byname(group_attribute, attr_user_name,
+		if (paircmp_register_by_name(group_attribute, attr_user_name,
 						false, sql_groupcmp, inst) < 0) {
 			PERROR("Failed registering group comparison");
 			goto error;
@@ -1250,7 +1250,7 @@ static rlm_rcode_t mod_authorize(void *instance, UNUSED void *thread, REQUEST *r
 		 */
 		RDEBUG2("User found in radcheck table");
 		user_found = true;
-		if (paircompare(request, request->packet->vps, check_tmp, &request->reply->vps) != 0) {
+		if (paircmp(request, request->packet->vps, check_tmp, &request->reply->vps) != 0) {
 			fr_pair_list_free(&check_tmp);
 			check_tmp = NULL;
 			goto skipreply;
@@ -1262,8 +1262,7 @@ static rlm_rcode_t mod_authorize(void *instance, UNUSED void *thread, REQUEST *r
 		     vp;
 		     vp = fr_cursor_next(&cursor)) {
 			if (!fr_assignment_op[vp->op]) continue;
-
-			rdebug_pair(2, request, vp, NULL);
+			RDEBUG2("&%pP", vp);
 		}
 		REXDENT();
 		radius_pairmove(request, &request->control, check_tmp, true);
@@ -1274,7 +1273,7 @@ static rlm_rcode_t mod_authorize(void *instance, UNUSED void *thread, REQUEST *r
 
 	if (inst->config->authorize_reply_query) {
 		/*
-		 *	Now get the reply pairs since the paircompare matched
+		 *	Now get the reply pairs since the paircmp matched
 		 */
 		if (xlat_aeval(request, &expanded, request, inst->config->authorize_reply_query,
 				 inst->sql_escape_func, handle) < 0) {
@@ -1298,7 +1297,7 @@ static rlm_rcode_t mod_authorize(void *instance, UNUSED void *thread, REQUEST *r
 		RDEBUG2("User found in radreply table, merging reply items");
 		user_found = true;
 
-		rdebug_pair_list(L_DBG_LVL_2, request, reply_tmp, NULL);
+		log_request_pair_list(L_DBG_LVL_2, request, reply_tmp, NULL);
 
 		radius_pairmove(request, &request->reply->vps, reply_tmp, true);
 

@@ -23,7 +23,7 @@
  *
  * @copyright 2017 Arran Cudbard-Bell <a.cudbardb@freeradius.org>
  */
-#include <freeradius-devel/ldap/libfreeradius-ldap.h>
+#include <freeradius-devel/ldap/ldap.h>
 #include <freeradius-devel/modules.h>
 #include <freeradius-devel/unlang.h>
 #include <freeradius-devel/protocol.h>
@@ -322,7 +322,7 @@ static void request_running(REQUEST *request, fr_state_signal_t action)
 	switch (request->request_state) {
 	case REQUEST_INIT:
 		if (RDEBUG_ENABLED) proto_ldap_packet_debug(request, request->packet, true);
-		rdebug_proto_pair_list(L_DBG_LVL_1, request, request->packet->vps, "");
+		log_request_proto_pair_list(L_DBG_LVL_1, request, request->packet->vps, "");
 
 		request->server_cs = request->listener->server_cs;
 		request->component = "ldap";
@@ -534,7 +534,7 @@ static void proto_ldap_sync_reinit(fr_event_list_t *el, struct timeval *now, voi
 	fr_timeval_add(&when, now, &inst->sync_retry_interval);
 	if (fr_event_timer_insert(inst, el, &inst->sync_retry_ev,
 				  &when, proto_ldap_sync_reinit, user_ctx) < 0) {
-		radlog_fatal("Failed inserting event: %s", fr_strerror());
+		log_fatal("Failed inserting event: %s", fr_strerror());
 	}
 }
 
@@ -890,7 +890,7 @@ static int proto_ldap_socket_recv(rad_listen_t *listen)
 		fr_timeval_add(&when, &now, &inst->sync_retry_interval);
 		if (fr_event_timer_insert(inst, inst->el, &inst->sync_retry_ev,
 					  &when, proto_ldap_sync_reinit, ctx) < 0) {
-			radlog_fatal("Failed inserting event: %s", fr_strerror());
+			log_fatal("Failed inserting event: %s", fr_strerror());
 		}
  		return 1;
 
@@ -905,7 +905,7 @@ static int proto_ldap_socket_recv(rad_listen_t *listen)
 		fr_timeval_add(&when, &now, &inst->conn_retry_interval);
 		if (fr_event_timer_insert(inst, inst->el, &inst->conn_retry_ev,
 					  &when, proto_ldap_connection_init, listen) < 0) {
-			radlog_fatal("Failed inserting event: %s", fr_strerror());
+			log_fatal("Failed inserting event: %s", fr_strerror());
 		}
 
  		return 0;
@@ -970,7 +970,7 @@ static int proto_ldap_socket_open(UNUSED CONF_SECTION *cs, rad_listen_t *listen)
 
 			if (fr_event_timer_insert(inst, inst->el, &inst->conn_retry_ev,
 						  &when, proto_ldap_connection_init, listen) < 0) {
-				radlog_fatal("Failed inserting event: %s", fr_strerror());
+				log_fatal("Failed inserting event: %s", fr_strerror());
 			}
 
 			return -1;

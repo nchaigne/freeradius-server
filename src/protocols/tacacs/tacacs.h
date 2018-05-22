@@ -231,12 +231,20 @@ typedef struct CC_HINT(__packed__) tacacs_packet {
 	};
 } tacacs_packet_t;
 
-tacacs_type_t tacacs_type(RADIUS_PACKET const * const packet);
-char const * tacacs_lookup_packet_code(RADIUS_PACKET const * const packet);
-uint32_t tacacs_session_id(RADIUS_PACKET const * const packet);
-int tacacs_read_packet(RADIUS_PACKET * const packet, char const * const secret);
-int tacacs_decode(RADIUS_PACKET * const packet);
-int tacacs_encode(RADIUS_PACKET * const packet, char const * const secret);
-int tacacs_send(RADIUS_PACKET * const packet, RADIUS_PACKET const * const original, char const * const secret);
+tacacs_type_t	tacacs_type(RADIUS_PACKET const * const packet);
 
-extern fr_dict_attr_t const *dict_tacacs_root;
+char const	*tacacs_lookup_packet_code(RADIUS_PACKET const * const packet);
+
+uint32_t	tacacs_session_id(RADIUS_PACKET const * const packet);
+
+int		tacacs_read_packet(RADIUS_PACKET * const packet, char const * const secret);
+
+int		tacacs_decode(RADIUS_PACKET * const packet);
+
+int		tacacs_encode(RADIUS_PACKET * const packet, char const * const secret);
+
+int		tacacs_send(RADIUS_PACKET * const packet, RADIUS_PACKET const * const original, char const * const secret);
+
+int		tacacs_init(char const *dict_dir);
+
+void		tacacs_free(void);

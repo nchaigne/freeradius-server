@@ -555,7 +555,7 @@ static rlm_rcode_t CC_HINT(nonnull) process_reply(NDEBUG_UNUSED eap_session_t *e
 	 */
 	if (tunnel_vps) {
 		RDEBUG("Sending tunneled reply attributes");
-		rdebug_pair_list(L_DBG_LVL_2, request, tunnel_vps, NULL);
+		log_request_pair_list(L_DBG_LVL_2, request, tunnel_vps, NULL);
 
 		vp2diameter(request, tls_session, tunnel_vps);
 		fr_pair_list_free(&tunnel_vps);
@@ -617,7 +617,7 @@ static int CC_HINT(nonnull) eap_ttls_postproxy(eap_session_t *eap_session, void 
 			fprintf(fr_log_fp, "} # server %s\n", cf_section_name2(fake->server_cs));
 
 			RDEBUG("Final reply from tunneled session code %d", fake->reply->code);
-			rdebug_pair_list(L_DBG_LVL_1, request, fake->reply->vps, NULL);
+			log_request_pair_list(L_DBG_LVL_1, request, fake->reply->vps, NULL);
 		}
 
 		/*
@@ -765,7 +765,7 @@ FR_CODE eap_ttls_process(eap_session_t *eap_session, tls_session_t *tls_session)
 	fr_pair_value_from_str(vp, "127.0.0.1", sizeof("127.0.0.1"));
 
 	RDEBUG("Got tunneled request");
-	rdebug_pair_list(L_DBG_LVL_1, request, fake->packet->vps, NULL);
+	log_request_pair_list(L_DBG_LVL_1, request, fake->packet->vps, NULL);
 
 	/*
 	 *	Update other items in the REQUEST data structure.
@@ -797,7 +797,7 @@ FR_CODE eap_ttls_process(eap_session_t *eap_session, tls_session_t *tls_session)
 
 				fr_pair_value_bstrncpy(t->username, vp->vp_octets + 5, vp->vp_length - 5);
 
-				RDEBUG("Got tunneled identity of %s", t->username->vp_strvalue);
+				RDEBUG("Got tunneled identity of %pV", &t->username->data);
 			} else {
 				/*
 				 *	Don't reject the request outright,
@@ -867,7 +867,7 @@ FR_CODE eap_ttls_process(eap_session_t *eap_session, tls_session_t *tls_session)
 			int			ret;
 			eap_tunnel_data_t	*tunnel;
 
-			RDEBUG("Tunneled authentication will be proxied to %s", vp->vp_strvalue);
+			RDEBUG("Tunneled authentication will be proxied to %pV", &vp->data);
 
 			/*
 			 *	Tell the original request that it's going

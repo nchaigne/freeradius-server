@@ -30,6 +30,7 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 #include <freeradius-devel/rad_assert.h>
+#include <freeradius-devel/tls/tls.h>
 
 #include <openssl/crypto.h>
 #include <openssl/pem.h>
@@ -680,7 +681,7 @@ static xlat_action_t cipher_rsa_decrypt_xlat(TALLOC_CTX *ctx, UNUSED fr_cursor_t
 	}
 
 	MEM(vb = fr_value_box_alloc_null(ctx));
-	fr_value_box_strsteal(vb, vb, NULL, plaintext, false);
+	fr_value_box_bstrsteal(vb, vb, NULL, plaintext, false);
 	fr_cursor_append(out, vb);
 
 	return XLAT_ACTION_DONE;

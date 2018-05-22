@@ -16,8 +16,8 @@
 
 /**
  * $Id$
- * @file proto_dhcpv4/proto_dhcpv4_all.c
- * @brief DHCPV4 processing.
+ * @file proto_dhcpv4/proto_dhcpv4_base.c
+ * @brief Base DORA, etc. DHCPV4 processing.
  *
  * @copyright 2018 The Freeradius server project.
  * @copyright 2018 Alan DeKok (aland@deployingradius.com)
@@ -31,26 +31,66 @@
 #include <freeradius-devel/dhcpv4/dhcpv4.h>
 #include <freeradius-devel/dhcpv4.h>
 
+static fr_dict_t const *dict_dhcpv4;
+
+extern fr_dict_autoload_t proto_dhcpv4_dict[];
+fr_dict_autoload_t proto_dhcpv4_dict[] = {
+	{ .out = &dict_dhcpv4, .proto = "dhcpv4" },
+	{ NULL }
+};
+
+static fr_dict_attr_t const *attr_dhcpv4_message_type;
+
+extern fr_dict_attr_autoload_t proto_dhcpv4_dict_attr[];
+fr_dict_attr_autoload_t proto_dhcpv4_dict_attr[] = {
+	{ .out = &attr_dhcpv4_message_type, .name = "DHCP-Message-Type", .type = FR_TYPE_UINT8, .dict = &dict_dhcpv4},
+	{ NULL }
+};
+
+static int reply_ok[FR_DHCP_INFORM + 1] = {
+	[0]			= FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND,
+	[FR_DHCP_DISCOVER]	= FR_DHCP_OFFER,
+	[FR_DHCP_OFFER]		= FR_DHCP_OFFER,
+	[FR_DHCP_REQUEST]	= FR_DHCP_ACK,
+	[FR_DHCP_DECLINE]	= FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND,
+	[FR_DHCP_ACK]		= FR_DHCP_ACK,
+	[FR_DHCP_NAK]		= FR_DHCP_NAK,
+	[FR_DHCP_RELEASE]	= FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND,
+	[FR_DHCP_INFORM]	= FR_DHCP_ACK,
+};
+
+static int reply_fail[FR_DHCP_INFORM + 1] = {
+	[0]			= FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND,
+	[FR_DHCP_DISCOVER]	= FR_DHCP_NAK,
+	[FR_DHCP_OFFER]		= FR_DHCP_NAK,
+	[FR_DHCP_REQUEST]	= FR_DHCP_NAK,
+	[FR_DHCP_DECLINE]	= FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND,
+	[FR_DHCP_ACK]		= FR_DHCP_NAK,
+	[FR_DHCP_NAK]		= FR_DHCP_NAK,
+	[FR_DHCP_RELEASE]	= FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND,
+	[FR_DHCP_INFORM]	= FR_DHCP_NAK,
+};
+
 static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 {
 	rlm_rcode_t rcode;
 	CONF_SECTION *unlang;
 	fr_dict_enum_t const *dv;
 	fr_dict_attr_t const *da = NULL;
+	VALUE_PAIR *vp;
 
 	REQUEST_VERIFY(request);
+	rad_assert(request->packet->code > 0);
+	rad_assert(request->packet->code <= FR_DHCP_INFORM);
 
 	switch (request->request_state) {
 	case REQUEST_INIT:
-		radlog_request(L_DBG, L_DBG_LVL_1, request, "Received %s ID %08x",
-			       dhcp_message_types[request->packet->code], request->packet->id);
-		rdebug_proto_pair_list(L_DBG_LVL_1, request, request->packet->vps, "");
+		RDEBUG("Received %s ID %08x", dhcp_message_types[request->packet->code], request->packet->id);
+		log_request_proto_pair_list(L_DBG_LVL_1, request, request->packet->vps, "");
 
 		request->component = "dhcpv4";
 
-		da = fr_dict_attr_by_num(NULL, 0, FR_DHCP_MESSAGE_TYPE);
-		rad_assert(da != NULL);
-		dv = fr_dict_enum_by_value(da, fr_box_uint32(request->packet->code));
+		dv = fr_dict_enum_by_value(attr_dhcpv4_message_type, fr_box_uint32(request->packet->code));
 		if (!dv) {
 			REDEBUG("Failed to find value for &request:DHCP-Message-Type");
 			return FR_IO_FAIL;
@@ -78,31 +118,30 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 
 		rad_assert(request->log.unlang_indent == 0);
 
-		switch (rcode) {
+		/*
+		 *	Allow the admin to explicitly set the reply
+		 *	type.
+		 */
+		vp = fr_pair_find_by_da(request->reply->vps, attr_dhcpv4_message_type, TAG_ANY);
+		if (vp) {
+			request->reply->code = vp->vp_uint8;
+		} else switch (rcode) {
 		case RLM_MODULE_NOOP:
 		case RLM_MODULE_OK:
 		case RLM_MODULE_UPDATED:
-			if (request->packet->code == FR_DHCP_DISCOVER) {
-				request->reply->code = FR_DHCP_OFFER;
-
-			} else if (request->packet->code == FR_DHCP_REQUEST) {
-				request->reply->code = FR_DHCP_ACK;
-
-			} else {
-				request->reply->code = FR_DHCP_NAK;
-			}
+			request->reply->code = reply_ok[request->packet->code];
 			break;
 
 		default:
 		case RLM_MODULE_REJECT:
 		case RLM_MODULE_FAIL:
+			request->reply->code = reply_fail[request->packet->code];
+			break;
+
 		case RLM_MODULE_HANDLED:
-			request->reply->code = FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND;
+			if (!request->reply->code) request->reply->code = FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND;
 			break;
 		}
-
-		if (!da) da = fr_dict_attr_by_num(NULL, 0, FR_DHCP_MESSAGE_TYPE);
-		rad_assert(da != NULL);
 
 		dv = fr_dict_enum_by_value(da, fr_box_uint32(request->reply->code));
 		unlang = NULL;
@@ -140,11 +179,8 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 			 *	the NAK section.
 			 */
 			if (request->reply->code != FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND) {
-				if (!da) da = fr_dict_attr_by_num(NULL, 0, FR_DHCP_MESSAGE_TYPE);
-				rad_assert(da != NULL);
-
-				dv = fr_dict_enum_by_value(da, fr_box_uint32(request->reply->code));
-				RWDEBUG("Failed running 'send %s', trying 'send Do-Not-Respond'.", dv->alias);
+				dv = fr_dict_enum_by_value(attr_dhcpv4_message_type, fr_box_uint32(request->reply->code));
+				RWDEBUG("Failed running 'send %s', trying 'send Do-Not-Respond'", dv->alias);
 
 				request->reply->code = FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND;
 
@@ -165,7 +201,7 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 		 *	Check for "do not respond".
 		 */
 		if (request->reply->code == FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND) {
-			RDEBUG("Not sending reply to client.");
+			RDEBUG("Not sending reply to client");
 			return FR_IO_DONE;
 		}
 
@@ -180,9 +216,9 @@ static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
 }
 
 
-extern fr_app_process_t proto_dhcpv4_all;
-fr_app_process_t proto_dhcpv4_all = {
+extern fr_app_process_t proto_dhcpv4_base;
+fr_app_process_t proto_dhcpv4_base = {
 	.magic		= RLM_MODULE_INIT,
-	.name		= "dhcpv4_all",
+	.name		= "dhcpv4_base",
 	.process	= mod_process,
 };

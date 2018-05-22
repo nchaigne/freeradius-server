@@ -45,7 +45,7 @@ RCSIDH(tls_h, "$Id$")
 #  define OPENSSL_NO_KRB5
 #endif
 
-#ifdef HAVE_OPENSSL_ENGINE_H
+#if 1
 #  include <openssl/engine.h>
 #endif
 #include <openssl/ssl.h>
@@ -190,7 +190,7 @@ typedef struct _tls_session_t {
 	} handshake_alert;
 } tls_session_t;
 
-#ifdef HAVE_OPENSSL_OCSP_H
+#if 1
 /** OCSP Configuration
  *
  */
@@ -313,7 +313,7 @@ struct fr_tls_conf_t {
 	char const	*verify_client_cert_cmd;
 	bool		require_client_cert;
 
-#ifdef HAVE_OPENSSL_OCSP_H
+#if 1
 	fr_tls_ocsp_conf_t	ocsp;			//!< Configuration for validating client certificates
 							//!< with ocsp.
 	fr_tls_ocsp_conf_t	staple;			//!< Configuration for validating server certificates
@@ -464,11 +464,11 @@ SSL_CTX		*tls_ctx_alloc(fr_tls_conf_t const *conf, bool client);
  *	tls/global.c
  */
 
-#ifdef ENABLE_OPENSSL_VERSION_CHECK
+#if 1
 int		tls_global_version_check(char const *acknowledged);
 #endif
 
-int		tls_global_init(char const *dictionary_dir);
+int		tls_global_init(char const *dict_dir);
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
 void		tls_global_cleanup(void);

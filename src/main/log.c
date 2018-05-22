@@ -160,6 +160,22 @@ const FR_NAME_NUMBER log_str2dst[] = {
 
 static char const spaces[] = "                                                                                                                        ";
 
+static fr_dict_t const *dict_freeradius;
+
+extern fr_dict_autoload_t log_dict[];
+fr_dict_autoload_t log_dict[] = {
+	{ .out = &dict_freeradius, .proto = "freeradius" },
+	{ NULL }
+};
+
+static fr_dict_attr_t const *attr_module_failure_message;
+
+extern fr_dict_attr_autoload_t log_dict_attr[];
+fr_dict_attr_autoload_t log_dict_attr[] = {
+	{ .out = &attr_module_failure_message, .name = "Module-Failure-Message", .type = FR_TYPE_STRING, .dict = &dict_freeradius },
+	{ NULL }
+};
+
 /** Send a server log message to its destination without evaluating its debug level
  *
  * @param log	destination.
@@ -167,8 +183,8 @@ static char const spaces[] = "                                                  
  * @param msg	with printf style substitution tokens.
  * @param ...	Substitution arguments.
  */
-static int radlog_always(fr_log_t const *log, fr_log_type_t type, char const *msg, ...) CC_HINT(format (printf, 3, 4));
-static int radlog_always(fr_log_t const *log, fr_log_type_t type, char const *msg, ...)
+static int log_always(fr_log_t const *log, fr_log_type_t type, char const *msg, ...) CC_HINT(format (printf, 3, 4));
+static int log_always(fr_log_t const *log, fr_log_type_t type, char const *msg, ...)
 {
 	va_list ap;
 	int r;
@@ -190,7 +206,7 @@ static int radlog_always(fr_log_t const *log, fr_log_type_t type, char const *ms
  *	- true if message should be logged.
  *	- false if message shouldn't be logged.
  */
-inline bool radlog_debug_enabled(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request)
+inline bool log_debug_enabled(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request)
 {
 	if (!request->log.dst) return false;
 
@@ -222,7 +238,7 @@ inline bool radlog_debug_enabled(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *
  * @param[in] ap	Substitution arguments.
  * @param[in] uctx	The #fr_log_t specifying the destination for log messages.
  */
-void vradlog_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char const *msg, va_list ap, void *uctx)
+void vlog_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char const *msg, va_list ap, void *uctx)
 {
 	char const	*filename;
 	FILE		*fp = NULL;
@@ -249,7 +265,7 @@ void vradlog_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, cha
 	 *	Debug messages get treated specially.
 	 */
 	if ((type & L_DBG) != 0) {
-		if (!radlog_debug_enabled(type, lvl, request)) return;
+		if (!log_debug_enabled(type, lvl, request)) return;
 
 		/*
 		 *	If we're debugging to a file, then use that.
@@ -436,7 +452,7 @@ print_msg:
 		break;
 	};
 
-	radlog_always(log_dst,
+	log_always(log_dst,
 		      type, "%s" "%.*s" "%s" "%s" "%s",
 		      msg_prefix,
 		      unlang_indent, spaces,
@@ -450,17 +466,70 @@ finish:
 	talloc_free(msg_prefix);
 }
 
+/** Add a module failure message VALUE_PAIR to the request
+ *
+ * @param[in] request	The current request.
+ * @param[in] msg	with printf style substitution tokens.
+ * @param[in] ap	Substitution arguments.
+ */
+void vlog_module_failure_msg(REQUEST *request, char const *msg, va_list ap)
+{
+	char		*p;
+	VALUE_PAIR	*vp;
+	va_list		aq;
+
+	if (!msg || !request || !request->packet) return;
+
+	rad_assert(attr_module_failure_message);
+
+	/*
+	 *  If we don't copy the original ap we get a segfault from vasprintf. This is apparently
+	 *  due to ap sometimes being implemented with a stack offset which is invalidated if
+	 *  ap is passed into another function. See here:
+	 *  http://julipedia.meroh.net/2011/09/using-vacopy-to-safely-pass-ap.html
+	 *
+	 *  I don't buy that explanation, but doing a va_copy here does prevent SEGVs seen when
+	 *  running unit tests which generate errors under CI.
+	 */
+	va_copy(aq, ap);
+	p = fr_vasprintf(request, msg, aq);
+	va_end(aq);
+
+	MEM(pair_add_request(&vp, attr_module_failure_message) >= 0);
+	if (request->module && (request->module[0] != '\0')) {
+		fr_pair_value_snprintf(vp, "%s: %s", request->module, p);
+	} else {
+		fr_pair_value_snprintf(vp, "%s", p);
+	}
+	talloc_free(p);
+}
+
+/** Add a module failure message VALUE_PAIRE to the request
+ *
+ * @param[in] request	The current request.
+ * @param[in] msg	with printf style substitution tokens.
+ * @param[in] ...	Substitution arguments.
+ */
+void log_module_failure_msg(REQUEST *request, char const *msg, ...)
+{
+	va_list ap;
+
+	va_start(ap, msg);
+	vlog_module_failure_msg(request, msg, ap);
+	va_end(ap);
+}
+
 /** Martial variadic log arguments into a va_list and pass to normal logging functions
  *
- * @see radlog_request_error for more details.
+ * @see log_request_error for more details.
  *
- * @param type the log category.
- * @param lvl of debugging this message should be logged at.
- * @param request The current request.
- * @param msg with printf style substitution tokens.
- * @param ... Substitution arguments.
+ * @param[in] type	the log category.
+ * @param[in] lvl	of debugging this message should be logged at.
+ * @param[in] request	The current request.
+ * @param[in] msg	with printf style substitution tokens.
+ * @param[in] ...	Substitution arguments.
  */
-void radlog_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char const *msg, ...)
+void log_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char const *msg, ...)
 {
 	va_list		ap;
 	log_dst_t	*dst_p;
@@ -484,13 +553,13 @@ void radlog_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char
  * So, we use this small wrapper function instead, which will hopefully guarantee
  * consistent behaviour.
  *
- * @param type the log category.
- * @param lvl of debugging this message should be logged at.
- * @param request The current request.
- * @param msg with printf style substitution tokens.
- * @param ... Substitution arguments.
+ * @param[in] type	the log category.
+ * @param[in] lvl	of debugging this message should be logged at.
+ * @param[in] request	The current request.
+ * @param[in] msg	with printf style substitution tokens.
+ * @param[in] ...	Substitution arguments.
  */
-void radlog_request_error(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char const *msg, ...)
+void log_request_error(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char const *msg, ...)
 {
 	va_list		ap;
 	log_dst_t	*dst_p;
@@ -501,7 +570,7 @@ void radlog_request_error(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request
 	for (dst_p = request->log.dst; dst_p; dst_p = dst_p->next) {
 		dst_p->func(type, lvl, request, msg, ap, dst_p->uctx);
 	}
-	vmodule_failure_msg(request, msg, ap);
+	vlog_module_failure_msg(request, msg, ap);
 	va_end(ap);
 }
 
@@ -510,20 +579,20 @@ void radlog_request_error(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request
  * This function drains any messages from fr_strerror buffer adding a prefix (msg)
  * to the first message.
  *
- * @param type the log category.
- * @param lvl of debugging this message should be logged at.
- * @param request The current request.
- * @param msg with printf style substitution tokens.
- * @param ... Substitution arguments.
+ * @param[in] type	the log category.
+ * @param[in] lvl	of debugging this message should be logged at.
+ * @param[in] request	The current request.
+ * @param[in] msg	with printf style substitution tokens.
+ * @param[in] ...	Substitution arguments.
  */
-void radlog_request_perror(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char const *msg, ...)
+void log_request_perror(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request, char const *msg, ...)
 {
 	char const *strerror;
 
 	if (!request->log.dst) return;
 
 	/*
-	 *	No strerror gets us identical behaviour to radlog_request_error
+	 *	No strerror gets us identical behaviour to log_request_error
 	 */
 	strerror = fr_strerror_pop();
 	if (!strerror) {
@@ -554,31 +623,84 @@ void radlog_request_perror(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *reques
 
 		if (!tmp) return;
 
-		radlog_request_error(type, lvl, request, "%s: %s", tmp, strerror);
+		log_request_error(type, lvl, request, "%s: %s", tmp, strerror);
 		talloc_free(tmp);
 	} else {
-		radlog_request_error(type, lvl, request, "%s", strerror);
+		log_request_error(type, lvl, request, "%s", strerror);
 	}
 
 	/*
 	 *	Only the first message gets the prefix
 	 */
 	while ((strerror = fr_strerror_pop())) {
-		radlog_request_error(type, lvl, request, "%s", strerror);
+		log_request_error(type, lvl, request, "%s", strerror);
 	}
+}
+
+/** Print a list of VALUE_PAIRs.
+ *
+ * @param[in] lvl	Debug lvl (1-4).
+ * @param[in] request	to read logging params from.
+ * @param[in] vp	to print.
+ * @param[in] prefix	(optional).
+ */
+void log_request_pair_list(fr_log_lvl_t lvl, REQUEST *request, VALUE_PAIR *vp, char const *prefix)
+{
+	fr_cursor_t cursor;
+
+	if (!vp || !request || !request->log.dst) return;
+
+	if (!log_debug_enabled(L_DBG, lvl, request)) return;
+
+	RINDENT();
+	for (vp = fr_cursor_init(&cursor, &vp);
+	     vp;
+	     vp = fr_cursor_next(&cursor)) {
+		VP_VERIFY(vp);
+
+		RDEBUGX(lvl, "%s%pP", prefix ? prefix : "&", vp);
+	}
+	REXDENT();
+}
+
+/** Print a list of protocol VALUE_PAIRs.
+ *
+ * @param[in] lvl	Debug lvl (1-4).
+ * @param[in] request	to read logging params from.
+ * @param[in] vp	to print.
+ * @param[in] prefix	(optional).
+ */
+void log_request_proto_pair_list(fr_log_lvl_t lvl, REQUEST *request, VALUE_PAIR *vp, char const *prefix)
+{
+	fr_cursor_t cursor;
+
+	if (!vp || !request || !request->log.dst) return;
+
+	if (!log_debug_enabled(L_DBG, lvl, request)) return;
+
+	RINDENT();
+	for (vp = fr_cursor_init(&cursor, &vp);
+	     vp;
+	     vp = fr_cursor_next(&cursor)) {
+		VP_VERIFY(vp);
+		if (vp->da->flags.internal) continue;
+
+		RDEBUGX(lvl, "%s%pP", prefix ? prefix : "&", vp);
+	}
+	REXDENT();
 }
 
 /** Write the string being parsed, and a marker showing where the parse error occurred
  *
- * @param type the log category.
- * @param lvl of debugging this message should be logged at.
- * @param request The current request.
- * @param msg string we were parsing.
- * @param idx The position of the marker relative to the string.
- * @param error What the parse error was.
+ * @param[in] type	the log category.
+ * @param[in] lvl	of debugging this message should be logged at.
+ * @param[in] request	The current request.
+ * @param[in] msg	string we were parsing.
+ * @param[in] idx	The position of the marker relative to the string.
+ * @param[in] error	What the parse error was.
  */
-void radlog_request_marker(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request,
-			   char const *msg, size_t idx, char const *error)
+void log_request_marker(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request,
+			char const *msg, size_t idx, char const *error)
 {
 	char const *prefix = "";
 	uint8_t unlang_indent;
@@ -600,14 +722,14 @@ void radlog_request_marker(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *reques
 	request->log.unlang_indent = 0;
 	request->log.module_indent = 0;
 
-	radlog_request(type, lvl, request, "%s%s", prefix, msg);
-	radlog_request(type, lvl, request, "%s%.*s^ %s", prefix, (int) idx, spaces, error);
+	log_request(type, lvl, request, "%s%s", prefix, msg);
+	log_request(type, lvl, request, "%s%.*s^ %s", prefix, (int) idx, spaces, error);
 
 	request->log.unlang_indent = unlang_indent;
 	request->log.module_indent = module_indent;
 }
 
-void radlog_request_hex(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request,
+void log_request_hex(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request,
 			uint8_t const *data, size_t data_len)
 {
 	size_t i, j, len;
@@ -619,11 +741,11 @@ void radlog_request_hex(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request,
 		if ((i + len) > data_len) len = data_len - i;
 
 		for (p = buffer, j = 0; j < len; j++, p += 3) sprintf(p, "%02x ", data[i + j]);
-		radlog_request(type, lvl, request, "%04x: %s", (int)i, buffer);
+		log_request(type, lvl, request, "%04x: %s", (int)i, buffer);
 	}
 }
 
-void radlog_hex(fr_log_t const *log, fr_log_type_t type, fr_log_lvl_t lvl, uint8_t const *data, size_t data_len)
+void log_hex(fr_log_t const *log, fr_log_type_t type, fr_log_lvl_t lvl, uint8_t const *data, size_t data_len)
 {
 	size_t i, j, len;
 	char *p;
@@ -643,7 +765,7 @@ void radlog_hex(fr_log_t const *log, fr_log_type_t type, fr_log_lvl_t lvl, uint8
 /** Log a fatal error, then exit
  *
  */
-void radlog_fatal(char const *fmt, ...)
+void log_fatal(char const *fmt, ...)
 {
 	va_list ap;
 
@@ -654,3 +776,38 @@ void radlog_fatal(char const *fmt, ...)
 	fr_exit_now(1);
 }
 
+/** Initialises the server logging functionality, and the underlying libfreeradius log
+ *
+ * @note Call log free when the server is done to fix any spurious memory leaks.
+ *
+ * @param[in] log	Logging parameters.
+ * @param[in] daemonize	Changes what we do with stdout/stderr.
+ * @param[in] dict_dir	Containing the dictionaries.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
+ */
+int log_init(fr_log_t *log, bool daemonize, char const *dict_dir)
+{
+	int ret;
+
+	ret = fr_log_init(log, daemonize);
+	if (ret < 0) return ret;
+
+	if (fr_dict_autoload(dict_dir, log_dict) < 0) {
+		fr_perror("log_init");
+		return -1;
+	}
+
+	if (fr_dict_attr_autoload(log_dict_attr) < 0) {
+		fr_perror("log_init");
+		return -1;
+	}
+
+	return ret;
+}
+
+void log_free(void)
+{
+	fr_dict_autofree(log_dict);
+}

@@ -583,7 +583,7 @@ static FR_CODE eap_fast_eap_payload(REQUEST *request, eap_session_t *eap_session
 	fr_pair_value_memcpy(fake->packet->vps, tlv_eap_payload->vp_octets, tlv_eap_payload->vp_length);
 
 	RDEBUG("Got tunneled request");
-	rdebug_pair_list(L_DBG_LVL_1, request, fake->packet->vps, NULL);
+	log_request_pair_list(L_DBG_LVL_1, request, fake->packet->vps, NULL);
 
 	/*
 	 * Tell the request that it's a fake one.
@@ -677,7 +677,7 @@ static FR_CODE eap_fast_eap_payload(REQUEST *request, eap_session_t *eap_session
 			int			ret;
 			eap_tunnel_data_t	*tunnel;
 
-			RDEBUG("Tunneled authentication will be proxied to %s", vp->vp_strvalue);
+			RDEBUG("Tunneled authentication will be proxied to %pV", &vp->data);
 
 			/*
 			 *	Tell the original request that it's going to be proxied.
@@ -960,7 +960,7 @@ FR_CODE eap_fast_process(eap_session_t *eap_session, tls_session_t *tls_session)
 				 data, data_len, NULL) < 0) return FR_CODE_ACCESS_REJECT;
 
 	RDEBUG("Got Tunneled FAST TLVs");
-	rdebug_pair_list(L_DBG_LVL_1, request, fast_vps, NULL);
+	log_request_pair_list(L_DBG_LVL_1, request, fast_vps, NULL);
 	code = eap_fast_process_tlvs(request, eap_session, tls_session, fast_vps);
 	fr_pair_list_free(&fast_vps);
 

@@ -364,9 +364,9 @@ static rlm_rcode_t dhcp_process(REQUEST *request)
 		VALUE_PAIR *relay;
 
 		/* DHCP-Relay-IP-Address */
-		relay = radius_pair_create(request->reply, &request->reply->vps,
-					  272, DHCP_MAGIC_VENDOR);
-		if (relay) relay->vp_ipv4addr = vp->vp_ipv4addr;
+		MEM(relay = fr_pair_afrom_num(request->reply, DHCP_MAGIC_VENDOR, 222));
+		relay->vp_ipv4addr = vp->vp_ipv4addr;
+		fr_pair_add(&request->reply->vps, relay);
 	}
 
 	vp = fr_pair_find_by_num(request->packet->vps, DHCP_MAGIC_VENDOR, 53, TAG_ANY); /* DHCP-Message-Type */
@@ -1035,9 +1035,9 @@ static void dhcp_packet_debug(REQUEST *request, RADIUS_PACKET *packet, bool rece
 	}
 
 	if (received) {
-		rdebug_pair_list(L_DBG_LVL_2, request, packet->vps, NULL);
+		log_request_pair_list(L_DBG_LVL_2, request, packet->vps, NULL);
 	} else {
-		rdebug_proto_pair_list(L_DBG_LVL_2, request, packet->vps, NULL);
+		log_request_proto_pair_list(L_DBG_LVL_2, request, packet->vps, NULL);
 	}
 }
 
@@ -1099,7 +1099,7 @@ static int dhcp_load(void)
 {
 	int ret;
 
-	ret = fr_dict_read(main_config.dict, main_config.dictionary_dir, "dictionary.dhcpv4");
+	ret = fr_dict_read(main_config.dict, main_config.dict_dir, "dictionary.dhcpv4");
 	if (fr_dhcpv4_init() < 0) {
 		PERROR("Failed initialising DHCP");
 		return -1;

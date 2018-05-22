@@ -18,8 +18,8 @@
 /**
  * $Id$
  *
- * @file include/soh.h
- * @brief Microsoft SoH support
+ * @file src/lib/soh/soh.h
+ * @brief Common libraries for parsing Microsoft SOH data
  *
  * @copyright 2010 Phil Mayers <p.mayers@imperial.ac.uk>
  */
@@ -29,11 +29,13 @@ RCSIDH(soh_h, "$Id$")
 extern "C" {
 #endif
 
-int soh_verify(REQUEST *request, uint8_t const *data, unsigned int data_len) CC_HINT(nonnull);
-uint16_t soh_pull_be_16(uint8_t const *p);
-uint32_t soh_pull_be_24(uint8_t const *p);
-uint32_t soh_pull_be_32(uint8_t const *p);
+int		soh_verify(REQUEST *request, uint8_t const *data, unsigned int data_len) CC_HINT(nonnull);
+uint16_t	soh_pull_be_16(uint8_t const *p);
+uint32_t	soh_pull_be_24(uint8_t const *p);
+uint32_t	soh_pull_be_32(uint8_t const *p);
 
+int		soh_init(char const *dict_dir);
+void		soh_free(void);
 #ifdef __cplusplus
 }
 #endif

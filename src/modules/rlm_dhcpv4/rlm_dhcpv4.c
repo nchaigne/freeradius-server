@@ -16,14 +16,14 @@
 
 /**
  * $Id$
- * @file proto_dhcpv4/rlm_dhcpv4.c
- * @brief Will contain dhcp listener code.
+ * @file src/modules/rlm_dhcpv4/rlm_dhcpv4.c
+ * @brief DHCP client and relay
  *
- * @copyright 2012  The FreeRADIUS server project
+ * @copyright 2012-2018 The FreeRADIUS server project
  */
 RCSID("$Id$")
 
-#include <freeradius-devel/libradius.h>
+#include <freeradius-devel/util/util.h>
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
@@ -113,7 +113,7 @@ static ssize_t dhcp_options_xlat(UNUSED TALLOC_CTX *ctx, char **out, size_t outl
 	for (vp = fr_cursor_head(&cursor);
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
-		rdebug_pair(L_DBG_LVL_2, request, vp, "dhcp_options: ");
+		RDEBUG2("dhcp_option: &%pP", vp);
 		decoded++;
 	}
 
@@ -140,7 +140,7 @@ static ssize_t dhcp_xlat(UNUSED TALLOC_CTX *ctx, char **out, size_t outlen,
 
 	while (isspace((int) *fmt)) fmt++;
 
-	if ((radius_copy_vp(request, &vp, request, fmt) < 0) || !vp) return 0;
+	if ((xlat_fmt_copy_vp(request, &vp, request, fmt) < 0) || !vp) return 0;
 	fr_cursor_init(&cursor, &vp);
 
 	len = fr_dhcpv4_encode_option(binbuf, sizeof(binbuf), &cursor, NULL);
@@ -207,7 +207,7 @@ static int dhcp_load(void)
 {
 	int ret;
 
-	ret = fr_dict_read(main_config.dict, main_config.dictionary_dir, "dictionary.dhcpv4");
+	ret = fr_dict_read(main_config.dict, main_config.dict_dir, "dictionary.dhcpv4");
 	if (fr_dhcpv4_init() < 0) {
 		PERROR("Failed loading DHCP dictionary");
 		return -1;

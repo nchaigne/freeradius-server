@@ -22,7 +22,7 @@
  */
 RCSID("$Id$")
 
-#include <freeradius-devel/libradius.h>
+#include <freeradius-devel/util/util.h>
 
 /*
  *	Are we using glibc or a close relative?
@@ -55,7 +55,7 @@ FILE *fr_log_fp = NULL;
    ERROR("%s^ %s", space, text);
  @endcode
  *
- * @todo merge with above function (radlog_request_marker)
+ * @todo merge with above function (log_request_marker)
  *
  * @param sp Where to write a dynamically allocated buffer of spaces used to indent the error text.
  * @param text Where to write the canonicalized version of msg (the error text).
@@ -615,7 +615,6 @@ bool fr_rate_limit_enabled(void)
 
 	return false;
 }
-
 
 void fr_printf_log(char const *fmt, ...)
 {

@@ -233,14 +233,24 @@ fr_dict_autoload_t rlm_ldap_dict[] = {
 	{ NULL }
 };
 
-static fr_dict_attr_t const *attr_cleartext_password;
+fr_dict_attr_t const *attr_cleartext_password;
+fr_dict_attr_t const *attr_crypt_password;
+fr_dict_attr_t const *attr_ldap_userdn;
+fr_dict_attr_t const *attr_nt_password;
+fr_dict_attr_t const *attr_password_with_header;
 
-static fr_dict_attr_t const *attr_user_name;
+fr_dict_attr_t const *attr_user_password;
+fr_dict_attr_t const *attr_user_name;
 
 extern fr_dict_attr_autoload_t rlm_ldap_dict_attr[];
 fr_dict_attr_autoload_t rlm_ldap_dict_attr[] = {
 	{ .out = &attr_cleartext_password, .name = "Cleartext-Password", .type = FR_TYPE_STRING, .dict = &dict_freeradius },
+	{ .out = &attr_crypt_password, .name = "Crypt-Password", .type = FR_TYPE_STRING, .dict = &dict_freeradius },
+	{ .out = &attr_ldap_userdn, .name = "LDAP-UserDN", .type = FR_TYPE_STRING, .dict = &dict_freeradius },
+	{ .out = &attr_nt_password, .name = "NT-Password", .type = FR_TYPE_OCTETS, .dict = &dict_freeradius },
+	{ .out = &attr_password_with_header, .name = "Password-With-Header", .type = FR_TYPE_STRING, .dict = &dict_freeradius },
 
+	{ .out = &attr_user_password, .name = "User-Password", .type = FR_TYPE_STRING, .dict = &dict_radius },
 	{ .out = &attr_user_name, .name = "User-Name", .type = FR_TYPE_STRING, .dict = &dict_radius },
 
 	{ NULL }
@@ -581,7 +591,7 @@ static int rlm_ldap_groupcmp(void *instance, REQUEST *request, UNUSED VALUE_PAIR
 
 	rad_assert(inst->groupobj_base_dn);
 
-	RDEBUG("Searching for user in group \"%s\"", check->vp_strvalue);
+	RDEBUG("Searching for user in group \"%pV\"", &check->data);
 
 	if (check->vp_length == 0) {
 		REDEBUG("Cannot do comparison (group name is empty)");
@@ -672,7 +682,7 @@ finish:
 	if (conn) mod_conn_release(inst, request, conn);
 
 	if (!found) {
-		RDEBUG("User is not a member of \"%s\"", check->vp_strvalue);
+		RDEBUG("User is not a member of \"%pV\"", &check->data);
 
 		return 1;
 	}
@@ -706,8 +716,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED void
 	}
 
 	if (!request->password ||
-	    (request->password->da->attr != FR_USER_PASSWORD)) {
+	    (request->password->da != attr_user_password)) {
 		RWDEBUG("You have set \"Auth-Type := LDAP\" somewhere");
+		RWDEBUG("without checking if User-Password is present");
 		RWDEBUG("*********************************************");
 		RWDEBUG("* THAT CONFIGURATION IS WRONG.  DELETE IT.   ");
 		RWDEBUG("* YOU ARE PREVENTING THE SERVER FROM WORKING");
@@ -759,7 +770,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED void
 		}
 	}
 
-	RDEBUG("Login attempt by \"%s\"", request->username->vp_strvalue);
+	RDEBUG("Login attempt by \"%pV\"", &request->username->data);
 
 	/*
 	 *	Get the DN by doing a search.
@@ -1463,28 +1474,31 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 		group_attribute = "LDAP-Group";
 	}
 
-	if (paircompare_register_byname(group_attribute, attr_user_name, false, rlm_ldap_groupcmp, inst) < 0) {
+	if (paircmp_register_by_name(group_attribute, attr_user_name, false, rlm_ldap_groupcmp, inst) < 0) {
 		PERROR("Error registering group comparison");
 		goto error;
 	}
 
-	inst->group_da = fr_dict_attr_by_name(NULL, group_attribute);
+	inst->group_da = fr_dict_attr_by_name(dict_freeradius, group_attribute);
 
 	/*
 	 *	Setup the cache attribute
 	 */
 	if (inst->cache_attribute) {
-		fr_dict_attr_flags_t flags;
+		fr_dict_attr_flags_t	flags;
+		fr_dict_t		*mutable;
+
+		memcpy(&mutable, &dict_freeradius, sizeof(mutable));
 
 		memset(&flags, 0, sizeof(flags));
-		if (fr_dict_attr_add(NULL, fr_dict_root(fr_dict_internal), inst->cache_attribute, -1, FR_TYPE_STRING,
-				     &flags) < 0) {
+		if (fr_dict_attr_add(mutable, fr_dict_root(mutable),
+				     inst->cache_attribute, -1, FR_TYPE_STRING, &flags) < 0) {
 			PERROR("Error creating cache attribute");
 		error:
 			return -1;
 
 		}
-		inst->cache_da = fr_dict_attr_by_name(NULL, inst->cache_attribute);
+		inst->cache_da = fr_dict_attr_by_name(dict_freeradius, inst->cache_attribute);
 	} else {
 		inst->cache_da = inst->group_da;	/* Default to the group_da */
 	}
@@ -1584,6 +1598,12 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 		goto error;
 	}
 #endif
+
+	/*
+	 *	Initialise server with zero length string to
+	 *	make code below simpler.
+	 */
+	inst->handle_config.server = talloc_strdup(inst, "");
 
 	/*
 	 *	Now iterate over all the 'server' config items
@@ -1701,7 +1721,8 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 					cf_log_err(conf, "Failed recombining URL components");
 					goto ldap_url_error;
 				}
-				inst->handle_config.server = talloc_asprintf_append(inst->handle_config.server, "%s ", url);
+				inst->handle_config.server = talloc_asprintf_append(inst->handle_config.server,
+										    "%s ", url);
 				free(url);
 			}
 #  else
@@ -1728,8 +1749,9 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 			}
 
 			inst->handle_config.server = talloc_asprintf_append(inst->handle_config.server, "%s:%i ",
-							      ldap_url->lud_host ? ldap_url->lud_host : "localhost",
-							      ldap_url->lud_port);
+									    ldap_url->lud_host ? ldap_url->lud_host :
+									   			 "localhost",
+									    ldap_url->lud_port);
 #  endif
 			/*
 			 *	@todo We could set a few other top level
@@ -1781,7 +1803,9 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 			}
 			if (port == 0) port = LDAP_PORT;
 
-			inst->handle_config.server = talloc_asprintf_append(inst->handle_config.server, "ldap://%.*s:%i ", (int) len, value, port);
+			inst->handle_config.server = talloc_asprintf_append(inst->handle_config.server,
+									    "ldap://%.*s:%i ",
+									    (int) len, value, port);
 #else
 			/*
 			 *	ldap_init takes port, which can be overridden by :port so

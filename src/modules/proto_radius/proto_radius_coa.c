@@ -29,6 +29,22 @@
 #include <freeradius-devel/dict.h>
 #include <freeradius-devel/rad_assert.h>
 
+static fr_dict_t const *dict_freeradius;
+
+extern fr_dict_autoload_t proto_radius_coa_dict[];
+fr_dict_autoload_t proto_radius_coa_dict[] = {
+	{ .out = &dict_freeradius, .proto = "freeradius" },
+	{ NULL }
+};
+
+static fr_dict_attr_t const *attr_packet_type;
+
+extern fr_dict_attr_autoload_t proto_radius_coa_dict_attr[];
+fr_dict_attr_autoload_t proto_radius_coa_dict_attr[] = {
+	{ .out = &attr_packet_type, .name = "Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
+	{ NULL }
+};
+
 static fr_io_final_t mod_process(REQUEST *request, fr_io_action_t action)
 {
 	VALUE_PAIR *vp;
@@ -51,7 +67,7 @@ static fr_io_final_t mod_process(REQUEST *request, fr_io_action_t action)
 	switch (request->request_state) {
 	case REQUEST_INIT:
 		RDEBUG("Received %s ID %i", fr_packet_codes[request->packet->code], request->packet->id);
-		rdebug_pair_list(L_DBG_LVL_1, request, request->packet->vps, "");
+		log_request_pair_list(L_DBG_LVL_1, request, request->packet->vps, "");
 
 		request->component = "radius";
 
@@ -111,13 +127,10 @@ static fr_io_final_t mod_process(REQUEST *request, fr_io_action_t action)
 		/*
 		 *	Allow for over-ride of reply code.
 		 */
-		vp = fr_pair_find_by_num(request->reply->vps, 0, FR_PACKET_TYPE, TAG_ANY);
+		vp = fr_pair_find_by_da(request->reply->vps, attr_packet_type, TAG_ANY);
 		if (vp) request->reply->code = vp->vp_uint32;
 
-		if (!da) da = fr_dict_attr_by_num(NULL, 0, FR_PACKET_TYPE);
-		rad_assert(da != NULL);
-
-		dv = fr_dict_enum_by_value(da, fr_box_uint32(request->reply->code));
+		dv = fr_dict_enum_by_value(attr_packet_type, fr_box_uint32(request->reply->code));
 		unlang = NULL;
 		if (dv) unlang = cf_section_find(request->server_cs, "send", dv->alias);
 
@@ -208,7 +221,7 @@ static fr_io_final_t mod_process(REQUEST *request, fr_io_action_t action)
 		 */
 		if (request->parent) {
 			RDEBUG("Sent %s ID %i", fr_packet_codes[request->reply->code], request->reply->id);
-			rdebug_pair_list(L_DBG_LVL_1, request, request->reply->vps, "");
+			log_request_pair_list(L_DBG_LVL_1, request, request->reply->vps, "");
 			return FR_IO_DONE;
 		}
 

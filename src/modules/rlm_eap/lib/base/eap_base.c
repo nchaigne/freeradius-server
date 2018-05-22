@@ -61,7 +61,7 @@ RCSID("$Id$")
 
 #define LOG_PREFIX "rlm_eap - "
 
-#include <freeradius-devel/libradius.h>
+#include <freeradius-devel/util/util.h>
 #include <freeradius-devel/rad_assert.h>
 #include "eap_types.h"
 #include "eap_attrs.h"
@@ -360,7 +360,7 @@ void eap_add_reply(REQUEST *request, fr_dict_attr_t const *da, uint8_t const *va
 	fr_pair_value_memcpy(vp, value, len);
 
 	RINDENT();
-	rdebug_pair(L_DBG_LVL_2, request, vp, "&reply:");
+	RDEBUG2("&reply:%pP", vp);
 	REXDENT();
 }
 
@@ -442,7 +442,7 @@ rlm_rcode_t eap_virtual_server(REQUEST *request, REQUEST *fake,
  */
 int eap_base_init(void)
 {
-	if (fr_dict_autoload(main_config.dictionary_dir, eap_base_dict) < 0) {
+	if (fr_dict_autoload(main_config.dict_dir, eap_base_dict) < 0) {
 		PERROR("Failed loading dictionary");
 		return -1;
 	}
