@@ -983,9 +983,9 @@ int tacacs_send(RADIUS_PACKET * const packet, RADIUS_PACKET const * const origin
 	return write(packet->sockfd, packet->data, packet->data_len);
 }
 
-int tacacs_init(char const *dict_dir)
+int tacacs_init(void)
 {
-	if (fr_dict_autoload(dict_dir, libfreeradius_tacacs_dict) < 0) return -1;
+	if (fr_dict_autoload(libfreeradius_tacacs_dict) < 0) return -1;
 	if (fr_dict_attr_autoload(libfreeradius_tacacs_dict_attr) < 0) return -1;
 
 	return 0;

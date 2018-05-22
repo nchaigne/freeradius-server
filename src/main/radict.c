@@ -49,6 +49,7 @@ fr_dict_t **dict_end = dicts;
 static void usage(void)
 {
 	fprintf(stderr, "usage: radict [OPTS] <attribute> [attribute...]\n");
+	fprintf(stderr, "  -E               Export dictionary definitions.\n");
 	fprintf(stderr, "  -D <dictdir>     Set main dictionary directory (defaults to " DICTDIR ").\n");
 	fprintf(stderr, "  -x               Debugging mode.\n");
 	fprintf(stderr, "");
@@ -104,8 +105,7 @@ static int load_dicts(TALLOC_CTX *ctx, char const *dict_dir)
 					goto error;
 				}
 				INFO("Loading dictionary: %s/%s", dict_dir, dp->d_name);
-				if (fr_dict_protocol_afrom_file(ctx, dict_end++,
-								dict_dir, dp->d_name) < 0) goto error;
+				if (fr_dict_protocol_afrom_file(dict_end++, dp->d_name) < 0) goto error;
 			/*
 			 *	...otherwise recurse to process sub-protocols (maybe?)
 			 */
@@ -140,6 +140,7 @@ int main(int argc, char *argv[])
 	char		c;
 	int		ret = 0;
 	bool		found = false;
+	bool		export = false;
 
 	TALLOC_CTX	*autofree = talloc_init("main");
 
@@ -152,7 +153,11 @@ int main(int argc, char *argv[])
 
 	fr_debug_lvl = 1;
 
-	while ((c = getopt(argc, argv, "D:xh")) != EOF) switch (c) {
+	while ((c = getopt(argc, argv, "ED:xh")) != EOF) switch (c) {
+		case 'E':
+			export = true;
+			break;
+
 		case 'D':
 			dict_dir = optarg;
 			break;
@@ -179,9 +184,15 @@ int main(int argc, char *argv[])
 		goto finish;
 	}
 
+	if (fr_dict_global_init(autofree, dict_dir) < 0) {
+		fr_perror("radict");
+		ret = 1;
+		goto finish;
+	}
+
 	INFO("Loading dictionary: %s/%s", dict_dir, FR_DICTIONARY_FILE);
 
-	if (fr_dict_internal_afrom_file(autofree, dict_end++, dict_dir, NULL) < 0) {
+	if (fr_dict_internal_afrom_file(dict_end++, NULL) < 0) {
 		fr_perror("radict");
 		ret = 1;
 		goto finish;
@@ -197,6 +208,14 @@ int main(int argc, char *argv[])
 		fr_perror("radict: No dictionaries loaded");
 		ret = 1;
 		goto finish;
+	}
+
+	if (export) {
+		fr_dict_t	**dict_p = dicts;
+
+		do {
+			fr_dict_dump(*dict_p);
+		} while (++dict_p < dict_end);
 	}
 
 	while (argc-- > 0) {
