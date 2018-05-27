@@ -39,7 +39,7 @@ RCSID("$Id$")
 #  define EAP_TLS_MPPE_KEY_LEN     32
 #endif
 
-FR_NAME_NUMBER const sim_state_table[] = {
+static FR_NAME_NUMBER const sim_state_table[] = {
 	{ "START",				EAP_SIM_SERVER_START				},
 	{ "CHALLENGE",				EAP_SIM_SERVER_CHALLENGE			},
 	{ "REAUTHENTICATE",			EAP_SIM_SERVER_REAUTHENTICATE			},
@@ -56,9 +56,9 @@ static CONF_PARSER submodule_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
-static fr_dict_t const *dict_eap_sim;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
+static fr_dict_t *dict_eap_sim;
 
 extern fr_dict_autoload_t rlm_eap_sim_dict[];
 fr_dict_autoload_t rlm_eap_sim_dict[] = {
@@ -864,7 +864,7 @@ static int process_eap_sim_challenge(eap_session_t *eap_session, VALUE_PAIR *vps
 /** Authenticate a previously sent challenge
  *
  */
-static rlm_rcode_t mod_process(UNUSED void *arg, eap_session_t *eap_session)
+static rlm_rcode_t mod_process(UNUSED void *instance, eap_session_t *eap_session)
 {
 	REQUEST			*request = eap_session->request;
 	eap_sim_session_t	*eap_sim_session = talloc_get_type_abort(eap_session->opaque, eap_sim_session_t);
@@ -1064,15 +1064,13 @@ static rlm_rcode_t mod_process(UNUSED void *arg, eap_session_t *eap_session)
 		eap_sim_state_enter(eap_session, EAP_SIM_SERVER_FAILURE_NOTIFICATION);
 		return RLM_MODULE_HANDLED;				/* We need to process more packets */
 	}
-
-	return RLM_MODULE_FAIL;
 }
 
 /*
  *	Initiate the EAP-SIM session by starting the state machine
  *      and initiating the state.
  */
-static rlm_rcode_t mod_session_init(UNUSED void *instance, eap_session_t *eap_session)
+static rlm_rcode_t mod_session_init(void *instance, eap_session_t *eap_session)
 {
 	REQUEST				*request = eap_session->request;
 	eap_sim_session_t		*eap_sim_session;
@@ -1180,5 +1178,5 @@ rlm_eap_submodule_t rlm_eap_sim = {
 	.load		= mod_load,
 	.unload		= mod_unload,
 	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process,		/* Process next round of EAP method */
+	.entry_point	= mod_process,		/* Process next round of EAP method */
 };

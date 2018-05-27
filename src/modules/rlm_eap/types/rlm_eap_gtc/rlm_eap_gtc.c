@@ -51,8 +51,8 @@ static CONF_PARSER submodule_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t rlm_eap_gtc_dict[];
 fr_dict_autoload_t rlm_eap_gtc_dict[] = {
@@ -91,7 +91,7 @@ static int auth_type_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNU
 		cf_log_err(ci, "Failed adding %s alias", attr_auth_type->name);
 		return -1;
 	}
-	*((fr_dict_enum_t **)out) = fr_dict_enum_by_alias(attr_auth_type, auth_type);
+	*((fr_dict_enum_t **)out) = fr_dict_enum_by_alias(attr_auth_type, auth_type, -1);
 
 	return 0;
 }
@@ -246,5 +246,5 @@ rlm_eap_submodule_t rlm_eap_gtc = {
 	.config		= submodule_config,
 
 	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process		/* Process next round of EAP method */
+	.entry_point	= mod_process		/* Process next round of EAP method */
 };

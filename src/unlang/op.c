@@ -433,7 +433,7 @@ static unlang_action_t unlang_group(REQUEST *request,
  *
  *  Just run some "unlang", but don't do anything else.
  */
-static fr_io_final_t unlang_process_continue(REQUEST *request, fr_io_action_t action)
+static fr_io_final_t unlang_process_continue(UNUSED void const *instance, REQUEST *request, fr_io_action_t action)
 {
 	rlm_rcode_t rcode;
 
@@ -539,7 +539,7 @@ static void unlang_subrequest_signal(UNUSED REQUEST *request, void *ctx, fr_stat
 /** Resume a subrequest
  *
  */
-static unlang_action_t unlang_subrequest_resume(UNUSED REQUEST *request, rlm_rcode_t *presult, void *rctx)
+static unlang_action_t unlang_subrequest_resume(REQUEST *request, rlm_rcode_t *presult, void *rctx)
 {
 	REQUEST			*child = talloc_get_type_abort(rctx, REQUEST);
 	unlang_stack_t		*stack = request->stack;
@@ -705,7 +705,7 @@ static unlang_action_t unlang_call(REQUEST *request,
 	server_cs = request->server_cs;
 	request->server_cs = g->server_cs;
 
-	request->async->process = g->process;
+	memcpy(&request->async->process, &g->process, sizeof(request->async->process));
 
 	RDEBUG("server %s {", cf_section_name2(g->server_cs));
 
@@ -717,7 +717,7 @@ static unlang_action_t unlang_call(REQUEST *request,
 	 *	(e.g. Access-Request -> Accounting-Request) unless
 	 *	we're in a subrequest.
 	 */
-	final = request->async->process(request, FR_IO_ACTION_RUN);
+	final = request->async->process(request->async->process_inst, request, FR_IO_ACTION_RUN);
 
 	RDEBUG("} # server %s", cf_section_name2(g->server_cs));
 

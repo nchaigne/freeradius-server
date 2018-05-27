@@ -192,7 +192,7 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t rlm_radius_udp_dict[];
 fr_dict_autoload_t rlm_radius_udp_dict[] = {
@@ -2016,7 +2016,7 @@ static fr_connection_state_t _conn_failed(UNUSED int fd, fr_connection_state_t s
 /** Process notification that fd is open
  *
  */
-static fr_connection_state_t _conn_open(UNUSED fr_event_list_t *el, UNUSED int fd, void *uctx)
+static fr_connection_state_t _conn_open(UNUSED fr_event_list_t *el, int fd, void *uctx)
 {
 	rlm_radius_udp_connection_t	*c = talloc_get_type_abort(uctx, rlm_radius_udp_connection_t);
 	rlm_radius_udp_thread_t		*t = c->thread;

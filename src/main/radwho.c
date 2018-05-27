@@ -55,8 +55,6 @@ static char const *dict_dir = DICTDIR;
 
 char const *radacct_dir = NULL;
 
-bool log_stripped_names;
-
 /*
  *	Global, for log.c to use.
  */
@@ -201,7 +199,7 @@ int main(int argc, char **argv)
 	uint32_t		nas_ip_address = INADDR_NONE;
 	int			zap = 0;
 	fr_dict_t		*dict = NULL;
-	TALLOC_CTX		*autofree = talloc_init("autofree");
+	TALLOC_CTX		*autofree = talloc_autofree_context();
 
 	raddb_dir = RADIUS_DIR;
 
@@ -543,7 +541,6 @@ int main(int argc, char **argv)
 		}
 	}
 	fclose(fp);
-	talloc_free(autofree);
 
 	return 0;
 }

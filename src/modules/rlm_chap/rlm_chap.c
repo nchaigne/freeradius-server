@@ -32,8 +32,8 @@ typedef struct {
 	fr_dict_enum_t		*auth_type;
 } rlm_chap_t;
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t rlm_chap_dict[];
 fr_dict_autoload_t rlm_chap_dict[] = {
@@ -83,16 +83,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, UNUSED void *t
 		fr_pair_add(&request->packet->vps, vp);
 	}
 
-	if (fr_pair_find_by_da(request->control, attr_auth_type, TAG_ANY) != NULL) {
-		RWDEBUG2("&control:%s already set.  Not setting to %pV", attr_auth_type->name, inst->auth_type->alias);
-		return RLM_MODULE_NOOP;
-	}
-
-	RDEBUG("&control:%s = %s", attr_auth_type->name, inst->auth_type->alias);
-
-	MEM(pair_update_control(&vp, attr_auth_type) >= 0);
-	fr_value_box_copy(vp, &vp->data, inst->auth_type->value);
-	vp->data.enumv = vp->da;
+	if (!module_section_type_set(request, attr_auth_type, inst->auth_type)) return RLM_MODULE_NOOP;
 
 	return RLM_MODULE_OK;
 }
@@ -204,7 +195,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 		PERROR("Failed adding %s alias", attr_auth_type->name);
 		return -1;
 	}
-	inst->auth_type = fr_dict_enum_by_alias(attr_auth_type, inst->name);
+	inst->auth_type = fr_dict_enum_by_alias(attr_auth_type, inst->name, -1);
 	rad_assert(inst->auth_type);
 
 	return 0;

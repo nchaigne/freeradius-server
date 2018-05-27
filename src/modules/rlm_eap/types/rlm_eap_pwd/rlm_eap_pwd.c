@@ -60,8 +60,8 @@ static CONF_PARSER submodule_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t rlm_eap_pwd_dict[];
 fr_dict_autoload_t rlm_eap_pwd_dict[] = {
@@ -584,6 +584,6 @@ rlm_eap_submodule_t rlm_eap_pwd = {
 	.detach		= mod_detach,
 
 	.session_init	= mod_session_init,	/* Create the initial request */
-	.process	= mod_process,		/* Process next round of EAP method */
+	.entry_point	= mod_process,		/* Process next round of EAP method */
 };
 

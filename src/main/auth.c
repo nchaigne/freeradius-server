@@ -64,97 +64,6 @@ char *auth_name(char *buf, size_t buflen, REQUEST *request, bool do_cli)
 	return buf;
 }
 
-
-
-/*
- * Make sure user/pass are clean
- * and then log them
- */
-static int rad_authlog(char const *msg, REQUEST *request, int goodpass)
-{
-	int logit;
-	char const *extra_msg = NULL;
-	char clean_password[1024];
-	char clean_username[1024];
-	char buf[1024];
-	char extra[1024];
-	char *p;
-	VALUE_PAIR *username = NULL;
-
-	if (!request->root->log_auth) {
-		return 0;
-	}
-
-	/*
-	 * Get the correct username based on the configured value
-	 */
-	if (!log_stripped_names) {
-		username = fr_pair_find_by_num(request->packet->vps, 0, FR_USER_NAME, TAG_ANY);
-	} else {
-		username = request->username;
-	}
-
-	/*
-	 *	Clean up the username
-	 */
-	if (username == NULL) {
-		strcpy(clean_username, "<no User-Name attribute>");
-	} else {
-		fr_snprint(clean_username, sizeof(clean_username), username->vp_strvalue, username->vp_length, '\0');
-	}
-
-	/*
-	 *	Clean up the password
-	 */
-	if (request->root->log_auth_badpass || request->root->log_auth_goodpass) {
-		if (!request->password) {
-			VALUE_PAIR *auth_type;
-
-			auth_type = fr_pair_find_by_num(request->control, 0, FR_AUTH_TYPE, TAG_ANY);
-			if (auth_type) {
-				snprintf(clean_password, sizeof(clean_password),
-					 "<via Auth-Type = %s>",
-					 fr_dict_enum_alias_by_value(auth_type->da, &auth_type->data));
-			} else {
-				strcpy(clean_password, "<no User-Password attribute>");
-			}
-		} else if (fr_pair_find_by_num(request->packet->vps, 0, FR_CHAP_PASSWORD, TAG_ANY)) {
-			strcpy(clean_password, "<CHAP-Password>");
-		} else {
-			fr_snprint(clean_password, sizeof(clean_password),
-				  request->password->vp_strvalue, request->password->vp_length, '\0');
-		}
-	}
-
-	if (goodpass) {
-		logit = request->root->log_auth_goodpass;
-		extra_msg = request->root->auth_goodpass_msg;
-	} else {
-		logit = request->root->log_auth_badpass;
-		extra_msg = request->root->auth_badpass_msg;
-	}
-
-	if (extra_msg) {
-		extra[0] = ' ';
-		p = extra + 1;
-		if (xlat_eval(p, sizeof(extra) - 1, request, extra_msg, NULL, NULL) < 0) {
-			return -1;
-		}
-	} else {
-		*extra = '\0';
-	}
-
-	RAUTH("%s: [%s%s%s] (%s)%s",
-		       msg,
-		       clean_username,
-		       logit ? "/" : "",
-		       logit ? clean_password : "",
-		       auth_name(buf, sizeof(buf), request, 1),
-		       extra);
-
-	return 0;
-}
-
 /*
  *	Check password.
  *
@@ -347,7 +256,6 @@ rlm_rcode_t rad_postauth(REQUEST *request)
  */
 rlm_rcode_t rad_authenticate(REQUEST *request)
 {
-	VALUE_PAIR	*module_msg;
 	VALUE_PAIR	*tmp = NULL;
 	int		result;
 	rlm_rcode_t    	rcode;
@@ -392,14 +300,6 @@ autz_redo:
 	case RLM_MODULE_REJECT:
 	case RLM_MODULE_USERLOCK:
 	default:
-		if ((module_msg = fr_pair_find_by_num(request->packet->vps, 0, FR_MODULE_FAILURE_MESSAGE, TAG_ANY)) != NULL) {
-			char msg[FR_MAX_STRING_LEN + 16];
-			snprintf(msg, sizeof(msg), "Invalid user (%s)",
-				 module_msg->vp_strvalue);
-			rad_authlog(msg,request,0);
-		} else {
-			rad_authlog("Invalid user", request, 0);
-		}
 		request->reply->code = FR_CODE_ACCESS_REJECT;
 		return rcode;
 	}
@@ -435,16 +335,6 @@ autz_redo:
 	if (result < 0) {
 		RDEBUG2("Failed to authenticate the user");
 		request->reply->code = FR_CODE_ACCESS_REJECT;
-
-		if ((module_msg = fr_pair_find_by_num(request->packet->vps, 0, FR_MODULE_FAILURE_MESSAGE, TAG_ANY)) != NULL){
-			char msg[FR_MAX_STRING_LEN+19];
-
-			snprintf(msg, sizeof(msg), "Login incorrect (%s)",
-				 module_msg->vp_strvalue);
-			rad_authlog(msg, request, 0);
-		} else {
-			rad_authlog("Login incorrect", request, 0);
-		}
 
 		if (request->password) {
 			VP_VERIFY(request->password);
@@ -482,16 +372,6 @@ autz_redo:
 	 */
 	if (request->reply->code == 0) request->reply->code = FR_CODE_ACCESS_ACCEPT;
 
-	if ((module_msg = fr_pair_find_by_num(request->packet->vps, 0, FR_MODULE_SUCCESS_MESSAGE, TAG_ANY)) != NULL){
-		char msg[FR_MAX_STRING_LEN+12];
-
-		snprintf(msg, sizeof(msg), "Login OK (%s)",
-			 module_msg->vp_strvalue);
-		rad_authlog(msg, request, 1);
-	} else {
-		rad_authlog("Login OK", request, 1);
-	}
-
 	return rcode;
 }
 
@@ -507,7 +387,7 @@ static rlm_rcode_t virtual_server_async(REQUEST *request, bool parent)
 	}
 
 	RDEBUG("server %s {", cf_section_name2(request->server_cs));
-	final = request->async->process(request, FR_IO_ACTION_RUN);
+	final = request->async->process(request->async->process_inst, request, FR_IO_ACTION_RUN);
 	RDEBUG("} # server %s", cf_section_name2(request->server_cs));
 
 	fr_cond_assert(final == FR_IO_REPLY);
@@ -650,8 +530,12 @@ skip:
 
 	if (request->reply->code == FR_CODE_ACCESS_REJECT) {
 		fr_pair_delete_by_num(&request->control, 0, FR_POST_AUTH_TYPE, TAG_ANY);
-		vp = pair_make_config("Post-Auth-Type", "Reject", T_OP_SET);
-		if (vp) (void) rad_postauth(request);
+
+		MEM(vp = fr_pair_afrom_num(request, 0, FR_POST_AUTH_TYPE));
+		fr_pair_value_from_str(vp, "Reject", -1);
+		fr_pair_add(&request->control, vp);
+
+		rad_postauth(request);
 	}
 
 	if (request->reply->code == FR_CODE_ACCESS_ACCEPT) {

@@ -89,7 +89,7 @@ static void NEVER_RETURNS usage(void)
 	exit(EXIT_FAILURE);
 }
 
-static fr_io_final_t test_process(REQUEST *request, fr_io_action_t action)
+static fr_io_final_t test_process(UNUSED void const *instance, REQUEST *request, fr_io_action_t action)
 {
 	MPRINT1("\t\tPROCESS --- request %"PRIu64" action %d\n", request->number, action);
 	return FR_IO_REPLY;
@@ -524,8 +524,8 @@ static void sig_ignore(int sig)
 
 int main(int argc, char *argv[])
 {
-	int c;
-	TALLOC_CTX	*autofree = talloc_init("main");
+	int		c;
+	TALLOC_CTX	*autofree = talloc_autofree_context();
 	uint16_t	port16 = 0;
 
 	fr_time_start();
@@ -591,7 +591,5 @@ int main(int argc, char *argv[])
 
 	master_process(autofree);
 
-	talloc_free(autofree);
-
-	return 0;
+	exit(EXIT_SUCCESS);
 }

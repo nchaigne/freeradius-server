@@ -39,10 +39,13 @@ struct fr_listen {
  *	Minimal data structure to use the new code.
  */
 struct fr_async_t {
+	fr_io_process_t		process;		//!< The current state function.
+	void			*process_inst;		//!< Instance data for the current state machine.
+
 	fr_time_t		recv_time;
 	fr_time_t		*original_recv_time;
 	fr_event_list_t		*el;
-	fr_io_process_t		process;
+
 	fr_time_tracking_t	tracking;
 	fr_channel_t		*channel;
 
@@ -52,14 +55,3 @@ struct fr_async_t {
 	uint32_t		priority;
 	bool			detached;	//!< if detached, we don't send real replies
 };
-
-/** Information to track src/dst ip/port
- */
-typedef struct fr_ip_srcdst_t {
-	int				if_index;
-
-	fr_ipaddr_t			src_ipaddr;
-	fr_ipaddr_t			dst_ipaddr;
-	uint16_t			src_port;
-	uint16_t 			dst_port;
-} fr_ip_srcdst_t;

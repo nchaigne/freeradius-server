@@ -30,9 +30,9 @@
 
 #include <freeradius-devel/tacacs/tacacs.h>
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
-static fr_dict_t const *dict_tacacs;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
+static fr_dict_t *dict_tacacs;
 
 extern fr_dict_autoload_t proto_tacacs_dict[];
 fr_dict_autoload_t proto_tacacs_dict[] = {
@@ -95,6 +95,9 @@ static void tacacs_status(REQUEST * const request, rlm_rcode_t rcode)
 	VALUE_PAIR *vp;
 
 	switch (tacacs_type(request->packet)) {
+	default:
+		return;
+
 	case TAC_PLUS_AUTHEN:
 		switch (rcode) {
 		case RLM_MODULE_OK:

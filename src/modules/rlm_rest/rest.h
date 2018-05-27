@@ -33,7 +33,7 @@ RCSIDH(other_h, "$Id$")
 /*
  *	The common JSON library (also tells us if we have json-c)
  */
-#include "../rlm_json/json.h"
+#include <freeradius-devel/json/json.h>
 
 #define REST_URI_MAX_LEN		2048
 #define REST_BODY_MAX_LEN		8192
@@ -265,7 +265,7 @@ typedef struct {
 	rlm_rest_handle_t		*handle;	//!< curl easy handle servicing our request.
 } rlm_rest_xlat_rctx_t;
 
-extern fr_dict_t const *dict_freeradius;
+extern fr_dict_t *dict_freeradius;
 
 extern fr_dict_attr_t const *attr_rest_http_body;
 extern fr_dict_attr_t const *attr_rest_http_header;

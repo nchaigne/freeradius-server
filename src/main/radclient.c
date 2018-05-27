@@ -79,8 +79,8 @@ static rc_request_t *rc_request_tail = NULL;
 
 static char const *radclient_version = RADIUSD_VERSION_STRING_BUILD("radclient");
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t radclient_dict[];
 fr_dict_autoload_t radclient_dict[] = {
@@ -486,8 +486,6 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 					vp = fr_cursor_current(&cursor);
 					if (!vp) break;
 					goto again;
-				} else {
-					break;
 				}
 			}
 
@@ -1184,7 +1182,7 @@ int main(int argc, char **argv)
 	rc_request_t	*this;
 	int		force_af = AF_UNSPEC;
 	fr_dict_t	*dict = NULL;
-	TALLOC_CTX	*autofree = talloc_init("autofree");
+	TALLOC_CTX	*autofree = talloc_autofree_context();
 
 	/*
 	 *	It's easier having two sets of flags to set the
@@ -1660,8 +1658,6 @@ int main(int argc, char **argv)
 
 	fr_dict_autofree(radclient_dict);
 
-	talloc_free(autofree);
-
 	if (do_summary) {
 		DEBUG("Packet summary:\n"
 		      "\tAccepted      : %" PRIu64 "\n"
@@ -1680,5 +1676,6 @@ int main(int argc, char **argv)
 	if ((stats.lost > 0) || (stats.failed > 0)) {
 		exit(1);
 	}
-	exit(0);
+
+	exit(EXIT_SUCCESS);
 }

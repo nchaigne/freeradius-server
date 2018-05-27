@@ -30,7 +30,7 @@
 #include <freeradius-devel/state.h>
 #include <freeradius-devel/rad_assert.h>
 
-static fr_dict_t const *dict_freeradius;
+static fr_dict_t *dict_freeradius;
 
 extern fr_dict_autoload_t proto_radius_acct_dict[];
 fr_dict_autoload_t proto_radius_acct_dict[] = {
@@ -46,12 +46,12 @@ fr_dict_attr_autoload_t proto_radius_acct_dict_attr[] = {
 	{ NULL }
 };
 
-static fr_io_final_t mod_process(REQUEST *request, fr_io_action_t action)
+static fr_io_final_t mod_process(UNUSED void const *instance, REQUEST *request, fr_io_action_t action)
 {
-	VALUE_PAIR *vp;
-	rlm_rcode_t rcode;
-	CONF_SECTION *unlang;
-	fr_dict_enum_t const *dv;
+	VALUE_PAIR 	*vp;
+	rlm_rcode_t	rcode;
+	CONF_SECTION	*unlang;
+	fr_dict_enum_t	const *dv;
 
 	REQUEST_VERIFY(request);
 
@@ -189,5 +189,5 @@ extern fr_app_process_t proto_radius_acct;
 fr_app_process_t proto_radius_acct = {
 	.magic		= RLM_MODULE_INIT,
 	.name		= "radius_acct",
-	.process	= mod_process,
+	.entry_point	= mod_process,
 };

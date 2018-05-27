@@ -37,7 +37,7 @@ RCSID("$Id$")
 #  define EAP_TLS_MPPE_KEY_LEN     32
 #endif
 
-FR_NAME_NUMBER const aka_state_table[] = {
+static FR_NAME_NUMBER const aka_state_table[] = {
 	{ "IDENTITY",				EAP_AKA_SERVER_IDENTITY				},
 	{ "CHALLENGE",				EAP_AKA_SERVER_CHALLENGE			},
 	{ "SUCCESS-NOTIFICATION",		EAP_AKA_SERVER_SUCCESS_NOTIFICATION 		},
@@ -47,7 +47,7 @@ FR_NAME_NUMBER const aka_state_table[] = {
 	{ NULL }
 };
 
-static rlm_rcode_t mod_process(UNUSED void *arg, eap_session_t *eap_session);
+static rlm_rcode_t mod_process(UNUSED void *instance, eap_session_t *eap_session);
 
 static CONF_PARSER submodule_config[] = {
 	{ FR_CONF_OFFSET("network_name", FR_TYPE_STRING | FR_TYPE_REQUIRED, rlm_eap_aka_t, network_name ) },
@@ -57,9 +57,9 @@ static CONF_PARSER submodule_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
-static fr_dict_t const *dict_eap_aka;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
+static fr_dict_t *dict_eap_aka;
 
 extern fr_dict_autoload_t rlm_eap_aka_dict[];
 fr_dict_autoload_t rlm_eap_aka_dict[] = {
@@ -868,7 +868,7 @@ static int process_eap_aka_challenge(eap_session_t *eap_session, VALUE_PAIR *vps
 /** Process the Peer's response and advantage the state machine
  *
  */
-static rlm_rcode_t mod_process(UNUSED void *arg, eap_session_t *eap_session)
+static rlm_rcode_t mod_process(UNUSED void *instance, eap_session_t *eap_session)
 {
 	REQUEST			*request = eap_session->request;
 	eap_aka_session_t	*eap_aka_session = talloc_get_type_abort(eap_session->opaque, eap_aka_session_t);
@@ -1008,8 +1008,6 @@ static rlm_rcode_t mod_process(UNUSED void *arg, eap_session_t *eap_session)
 			eap_aka_state_enter(eap_session, EAP_AKA_SERVER_FAILURE_NOTIFICATION);
 			return RLM_MODULE_HANDLED;				/* We need to process more packets */
 		}
-
-		break;
 
 	/*
 	 *	Process the response to our previous challenge.
@@ -1366,5 +1364,5 @@ rlm_eap_submodule_t rlm_eap_aka = {
 	.load		= mod_load,
 	.unload		= mod_unload,
 	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process,		/* Process next round of EAP method */
+	.entry_point	= mod_process,		/* Process next round of EAP method */
 };

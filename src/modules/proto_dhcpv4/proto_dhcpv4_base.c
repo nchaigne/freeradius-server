@@ -31,7 +31,7 @@
 #include <freeradius-devel/dhcpv4/dhcpv4.h>
 #include <freeradius-devel/dhcpv4.h>
 
-static fr_dict_t const *dict_dhcpv4;
+static fr_dict_t *dict_dhcpv4;
 
 extern fr_dict_autoload_t proto_dhcpv4_dict[];
 fr_dict_autoload_t proto_dhcpv4_dict[] = {
@@ -71,7 +71,7 @@ static int reply_fail[FR_DHCP_INFORM + 1] = {
 	[FR_DHCP_INFORM]	= FR_DHCP_NAK,
 };
 
-static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
+static fr_io_final_t mod_process(UNUSED void const *instance, REQUEST *request, UNUSED fr_io_action_t action)
 {
 	rlm_rcode_t rcode;
 	CONF_SECTION *unlang;
@@ -220,5 +220,5 @@ extern fr_app_process_t proto_dhcpv4_base;
 fr_app_process_t proto_dhcpv4_base = {
 	.magic		= RLM_MODULE_INIT,
 	.name		= "dhcpv4_base",
-	.process	= mod_process,
+	.entry_point	= mod_process,
 };

@@ -88,9 +88,10 @@ static inline void _rest_io_demux(rlm_rest_thread_t *thread, CURLM *mandle)
 
 			unlang_resumable(request);
 		}
+			break;
 
 		default:
-#if 0
+#ifndef NDEBUG
 			DEBUG4("Got unknown msg (%i) when dequeueing curl responses", msg_queued);
 #endif
 			break;

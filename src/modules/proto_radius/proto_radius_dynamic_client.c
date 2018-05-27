@@ -29,7 +29,7 @@
 #include <freeradius-devel/dict.h>
 #include <freeradius-devel/rad_assert.h>
 
-static fr_dict_t const *dict_freeradius;
+static fr_dict_t *dict_freeradius;
 
 extern fr_dict_autoload_t proto_radius_dynamic_client_dict[];
 fr_dict_autoload_t proto_radius_dynamic_client_dict[] = {
@@ -53,7 +53,7 @@ fr_dict_attr_autoload_t proto_radius_dynamic_client_dict_attr[] = {
 	{ NULL }
 };
 
-static fr_io_final_t mod_process(REQUEST *request, fr_io_action_t action)
+static fr_io_final_t mod_process(UNUSED void const *instance, REQUEST *request, fr_io_action_t action)
 {
 	rlm_rcode_t rcode;
 	CONF_SECTION *unlang;
@@ -239,5 +239,5 @@ fr_app_process_t proto_radius_dynamic_client = {
 	.magic		= RLM_MODULE_INIT,
 	.name		= "radius_dynamic_client",
 	.instantiate	= mod_instantiate,
-	.process	= mod_process,
+	.entry_point	= mod_process,
 };

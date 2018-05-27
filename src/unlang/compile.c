@@ -601,7 +601,7 @@ static bool pass2_cond_callback(void *ctx, fr_cond_t *c)
 	 *	Where "foo" is dynamically defined.
 	 */
 	if (c->pass2_fixup == PASS2_FIXUP_TYPE) {
-		if (!fr_dict_enum_by_alias(map->lhs->tmpl_da, map->rhs->name)) {
+		if (!fr_dict_enum_by_alias(map->lhs->tmpl_da, map->rhs->name, -1)) {
 			cf_log_err(map->ci, "Invalid reference to non-existent %s %s { ... }",
 				   map->lhs->tmpl_da->name,
 				   map->rhs->name);
@@ -1237,7 +1237,7 @@ int unlang_fixup_update(vp_map_t *map, UNUSED void *ctx)
 		if (tmpl_cast_in_place(map->rhs, map->lhs->tmpl_da->type, map->lhs->tmpl_da) < 0) {
 			cf_log_perr(map->ci, "Cannot convert RHS value (%s) to LHS attribute type (%s)",
 				    fr_int2str(dict_attr_types, FR_TYPE_STRING, "<INVALID>"),
-				    fr_int2str(dict_attr_types, map->lhs->tmpl_value_type, "<INVALID>"));
+				    fr_int2str(dict_attr_types, map->lhs->tmpl_da->type, "<INVALID>"));
 			return -1;
 		}
 
@@ -1707,7 +1707,7 @@ static bool compile_action_subsection(unlang_t *c, CONF_SECTION *cs, CONF_SECTIO
 }
 
 
-static unlang_t *compile_children(unlang_group_t *g, UNUSED unlang_t *parent, unlang_compile_t *unlang_ctx,
+static unlang_t *compile_children(unlang_group_t *g, unlang_t *parent, unlang_compile_t *unlang_ctx,
 				  unlang_group_type_t group_type, unlang_group_type_t parentgroup_type)
 {
 	CONF_ITEM *ci = NULL;
@@ -2728,7 +2728,7 @@ static unlang_t *compile_call(unlang_t *parent, unlang_compile_t *unlang_ctx, CO
 		return NULL;
 	}
 
-	g->process = *process_p;
+	g->process = (void *)*process_p;
 	g->server_cs = server_cs;
 
 	c = unlang_group_to_generic(g);

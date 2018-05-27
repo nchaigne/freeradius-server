@@ -31,7 +31,7 @@ RCSID("$Id$")
 #include <freeradius-devel/rad_assert.h>
 #include <freeradius-devel/md5.h>
 
-static fr_dict_t const *dict_freeradius;
+static fr_dict_t *dict_freeradius;
 
 extern fr_dict_autoload_t rlm_eap_md5_dict[];
 fr_dict_autoload_t rlm_eap_md5_dict[] = {
@@ -47,7 +47,7 @@ fr_dict_attr_autoload_t rlm_eap_md5_dict_attr[] = {
 	{ NULL }
 };
 
-static rlm_rcode_t mod_process(UNUSED void *arg, eap_session_t *eap_session);
+static rlm_rcode_t mod_process(UNUSED void *instance, eap_session_t *eap_session);
 
 /*
  *	Initiate the EAP-MD5 session by sending a challenge to the peer.
@@ -107,7 +107,7 @@ static rlm_rcode_t mod_session_init(UNUSED void *instance, eap_session_t *eap_se
 /*
  *	Authenticate a previously sent challenge.
  */
-static rlm_rcode_t mod_process(UNUSED void *arg, eap_session_t *eap_session)
+static rlm_rcode_t mod_process(UNUSED void *instance, eap_session_t *eap_session)
 {
 	MD5_PACKET	*packet;
 	MD5_PACKET	*reply;
@@ -173,5 +173,5 @@ rlm_eap_submodule_t rlm_eap_md5 = {
 	.provides	= { FR_EAP_MD5 },
 	.magic		= RLM_MODULE_INIT,
 	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process		/* Process next round of EAP method */
+	.entry_point	= mod_process		/* Process next round of EAP method */
 };

@@ -30,7 +30,7 @@
 #include <freeradius-devel/rad_assert.h>
 #include "vqp.h"
 
-static fr_io_final_t mod_process(REQUEST *request, UNUSED fr_io_action_t action)
+static fr_io_final_t mod_process(UNUSED void const *instance, REQUEST *request, UNUSED fr_io_action_t action)
 {
 	rlm_rcode_t rcode;
 	CONF_SECTION *unlang;
@@ -197,5 +197,5 @@ extern fr_app_process_t proto_vmps_all;
 fr_app_process_t proto_vmps_all = {
 	.magic		= RLM_MODULE_INIT,
 	.name		= "vmps_all",
-	.process	= mod_process,
+	.entry_point	= mod_process,
 };

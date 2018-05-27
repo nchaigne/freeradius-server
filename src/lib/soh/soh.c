@@ -84,7 +84,7 @@ typedef struct {
 	uint16_t tlv_len;
 } soh_tlv;
 
-static fr_dict_t const *dict_freeradius;
+static fr_dict_t *dict_freeradius;
 
 extern fr_dict_autoload_t soh_dict[];
 fr_dict_autoload_t soh_dict[] = {
@@ -731,6 +731,8 @@ int fr_soh_init(void)
 		PERROR("Failed resolving attributes");
 		return -1;
 	}
+
+	instance_count++;
 
 	return 0;
 }

@@ -36,9 +36,9 @@ RCSID("$Id$")
 
 #define MAX_ARGV (16)
 
-TALLOC_CTX		*dict_ctx;
-fr_hash_table_t		*protocol_by_name = NULL;	//!< Hash containing names of all the registered protocols.
-fr_hash_table_t		*protocol_by_num = NULL;	//!< Hash containing numbers of all the registered protocols.
+static TALLOC_CTX	*dict_ctx;
+static fr_hash_table_t	*protocol_by_name = NULL;	//!< Hash containing names of all the registered protocols.
+static fr_hash_table_t	*protocol_by_num = NULL;	//!< Hash containing numbers of all the registered protocols.
 static char		*default_dict_dir;		//!< The default location for loading dictionaries if one
 							///< wasn't provided.
 
@@ -73,9 +73,6 @@ typedef struct dict_enum_fixup_t {
 	struct dict_enum_fixup_t *next;	//!< Next in the linked list of fixups.
 } dict_enum_fixup_t;
 
-#define FR_PROTOCOL_UNSET	0		//!< No protocol specified.
-#define FR_PROTOCOL_INTERNAL	UINT32_MAX	//!< Magic internal protocol number.
-
 /** Vendors and attribute names
  *
  * It's very likely that the same vendors will operate in multiple
@@ -101,7 +98,10 @@ struct fr_dict {
 	fr_hash_table_t		*values_by_alias;	//!< Lookup an attribute enum by its alias name.
 
 	fr_dict_attr_t		*root;			//!< Root attribute of this dictionary.
+
 	TALLOC_CTX		*pool;			//!< Talloc memory pool to reduce allocs.
+	TALLOC_CTX		*fixup_pool;		//!< Temporary pool for fixups, reduces holes
+							///< in the dictionary.
 };
 
 /** Map data types to names representing those types
@@ -274,19 +274,23 @@ static void hash_pool_free(void *to_free)
 /** Apply a simple (case insensitive) hashing function to the name of an attribute, vendor or protocol
  *
  * @param[in] name	of the attribute, vendor or protocol.
+ * @param[in] len	length of the input string.
+ *
  * @return the hashed derived from the name.
  */
-static uint32_t dict_hash_name(char const *name)
+static uint32_t dict_hash_name(char const *name, size_t len)
 {
 	uint32_t hash = FNV_MAGIC_INIT;
-	char const *p;
 
-	for (p = name; *p != '\0'; p++) {
+	char const *p = name, *q = name + len;
+
+	while (p < q) {
 		int c = *(unsigned char const *)p;
 		if (isalpha(c)) c = tolower(c);
 
 		hash *= FNV_MAGIC_PRIME;
 		hash ^= (uint32_t)(c & 0xff);
+		p++;
 	}
 
 	return hash;
@@ -294,12 +298,16 @@ static uint32_t dict_hash_name(char const *name)
 
 /** Wrap name hash function for fr_dict_protocol_t
  *
- * @param data fr_dict_attr_t to hash.
+ * @param[in]	data fr_dict_attr_t to hash.
  * @return the hash derived from the name of the attribute.
  */
 static uint32_t dict_protocol_name_hash(void const *data)
 {
-	return dict_hash_name(((fr_dict_t const *)data)->root->name);
+	char const *name;
+
+	name = ((fr_dict_t const *)data)->root->name;
+
+	return dict_hash_name(name, strlen(name));
 }
 
 /** Compare two protocol names
@@ -339,7 +347,11 @@ static int dict_protocol_num_cmp(void const *one, void const *two)
  */
 static uint32_t dict_attr_name_hash(void const *data)
 {
-	return dict_hash_name(((fr_dict_attr_t const *)data)->name);
+	char const *name;
+
+	name = ((fr_dict_attr_t const *)data)->name;
+
+	return dict_hash_name(name, strlen(name));
 }
 
 /** Compare two attribute names
@@ -389,7 +401,11 @@ static int dict_attr_combo_cmp(void const *one, void const *two)
  */
 static uint32_t dict_vendor_name_hash(void const *data)
 {
-	return dict_hash_name(((fr_dict_vendor_t const *)data)->name);
+	char const *name;
+
+	name = ((fr_dict_vendor_t const *)data)->name;
+
+	return dict_hash_name(name, strlen(name));
 }
 
 /** Compare two attribute names
@@ -431,7 +447,8 @@ static uint32_t dict_enum_alias_hash(void const *data)
 	uint32_t hash;
 	fr_dict_enum_t const *enumv = data;
 
-	hash = dict_hash_name(enumv->alias);
+	hash = dict_hash_name((void const *)enumv->alias, enumv->alias_len);
+
 	return fr_hash_update(&enumv->da, sizeof(enumv->da), hash);		//-V568
 }
 
@@ -1121,7 +1138,7 @@ static bool dict_attr_fields_valid(fr_dict_t *dict, fr_dict_attr_t const *parent
 	return true;
 }
 
-/** Allocate a dictionary attribute as a pool, and assign a name buffer
+/** Allocate a dictionary attribute and assign a name
  *
  * @param[in] ctx		to allocate attribute in.
  * @param[in] name		to set.
@@ -1138,13 +1155,7 @@ static fr_dict_attr_t *dict_attr_alloc_name(TALLOC_CTX *ctx, char const *name)
 		return NULL;
 	}
 
-#ifdef HAVE_TALLOC_POOLED_OBJECT
-	da = talloc_pooled_object(ctx, fr_dict_attr_t, 1, strlen(name) + 1);
-	memset(da, 0, sizeof(*da));
-#else
 	da = talloc_zero(ctx, fr_dict_attr_t);
-#endif
-
 	da->name = talloc_typed_strdup(da, name);
 	if (!da->name) {
 		talloc_free(da);
@@ -1276,13 +1287,7 @@ static fr_dict_attr_t *dict_attr_ref_alloc(fr_dict_t *dict, fr_dict_attr_t const
 		return NULL;
 	}
 
-#ifdef HAVE_TALLOC_POOLED_OBJECT
-	ref_n = talloc_pooled_object(dict->pool, fr_dict_attr_ref_t, 1, strlen(name) + 1);
-	memset(ref_n, 0, sizeof(*ref_n));
-#else
 	ref_n = talloc_zero(dict->pool, fr_dict_attr_ref_t);
-#endif
-
 	ref_n->tlv.name = talloc_typed_strdup(ref, name);
 	if (!ref_n->tlv.name) {
 		talloc_free(ref_n);
@@ -1362,13 +1367,7 @@ static int dict_vendor_add(fr_dict_t *dict, char const *name, unsigned int num)
 		return -1;
 	}
 
-#ifdef HAVE_TALLOC_POOLED_OBJECT
-	vendor = talloc_pooled_object(dict, fr_dict_vendor_t, 1, strlen(name) + 1);
-	memset(vendor, 0, sizeof(*vendor));
-#else
 	vendor = talloc_zero(dict, fr_dict_vendor_t);
-#endif
-
 	vendor->name = talloc_typed_strdup(vendor, name);
 	if (!vendor->name) {
 		talloc_free(vendor);
@@ -1441,8 +1440,10 @@ static inline int dict_attr_child_add(fr_dict_attr_t *parent, fr_dict_attr_t *ch
 	 *	We only allocate the pointer array *if* the parent has children.
 	 */
 	if (!parent->children) parent->children = talloc_zero_array(parent, fr_dict_attr_t const *, UINT8_MAX + 1);
-	if (!parent->children) return -1;
-
+	if (!parent->children) {
+		fr_strerror_printf("Out of memory");
+		return -1;
+	}
 	/*
 	 *	Treat the array as a hash of 255 bins, with attributes
 	 *	sorted into bins using num % 255.
@@ -1798,6 +1799,7 @@ int fr_dict_enum_add_alias(fr_dict_attr_t const *da, char const *alias,
 		return -1;
 	}
 	enumv->alias = talloc_typed_strdup(enumv, alias);
+	enumv->alias_len = strlen(alias);
 	enum_value = fr_value_box_alloc(enumv, da->type, NULL, false);
 
 	if (da->type != value->type) {
@@ -1842,7 +1844,7 @@ int fr_dict_enum_add_alias(fr_dict_attr_t const *da, char const *alias,
 			 *	name and value.  There are lots in
 			 *	dictionary.ascend.
 			 */
-			old = fr_dict_enum_by_alias(da, alias);
+			old = fr_dict_enum_by_alias(da, alias, -1);
 			if (!fr_cond_assert(old)) return -1;
 
 			if (fr_value_box_cmp(old->value, enumv->value) == 0) {
@@ -1897,7 +1899,7 @@ int fr_dict_enum_add_alias_next(fr_dict_attr_t const *da, char const *alias)
 				.type = da->type
 			};
 
-	if (fr_dict_enum_by_alias(da, alias)) return 0;
+	if (fr_dict_enum_by_alias(da, alias, -1)) return 0;
 
 	switch (da->type) {
 	case FR_TYPE_INT8:
@@ -1953,15 +1955,14 @@ int fr_dict_enum_add_alias_next(fr_dict_attr_t const *da, char const *alias)
 	for (;;) {
 		fr_value_box_increment(&v);
 
-		if (fr_value_box_cmp_op(T_OP_EQ, &v, &s) == 0) {
+		if (fr_value_box_cmp_op(T_OP_CMP_EQ, &v, &s) == 0) {
 			fr_strerror_printf("No free integer values for enumeration");
 			return -1;
 		}
 
 		if (!fr_dict_enum_by_value(da, &v)) goto add;
 	}
-
-	return 0;
+	/* NEVER REACHED */
 }
 
 /** Copy a known or unknown attribute to produce an unknown attribute
@@ -2877,6 +2878,55 @@ fr_dict_attr_t const *fr_dict_root(fr_dict_t const *dict)
 	return dict->root;
 }
 
+/** Look up a protocol name embedded in another string
+ *
+ * @param[in,out] name		string start.
+ * @return
+ * 	- Attribute matching name.
+ *  	- NULL if no matching attribute could be found.
+ */
+fr_dict_t *fr_dict_by_protocol_substr(char const **name)
+{
+	fr_dict_attr_t		root;
+	fr_dict_t		find = { .root = &root };
+
+	fr_dict_t		*dict;
+	char const		*p;
+	size_t			len;
+
+	if (!protocol_by_name || !name || !*name) return NULL;
+
+	memset(&root, 0, sizeof(root));
+
+	/*
+	 *	Advance p until we get something that's not part of
+	 *	the dictionary attribute name.
+	 */
+	for (p = *name; fr_dict_attr_allowed_chars[(int)*p] && (*p != '.'); p++);
+
+	len = p - *name;
+	if (len > FR_DICT_ATTR_MAX_NAME_LEN) {
+		fr_strerror_printf("Attribute name too long");
+		return NULL;
+	}
+
+	root.name = talloc_bstrndup(NULL, *name, len);
+	if (!root.name) {
+		fr_strerror_printf("Out of memory");
+		return NULL;
+	}
+	dict = fr_hash_table_finddata(protocol_by_name, &find);
+	talloc_const_free(root.name);
+
+	if (!dict) {
+		fr_strerror_printf("Unknown protocol '%.*s'", (int) len, *name);
+		return NULL;
+	}
+	*name = p;
+
+	return dict;
+}
+
 /** Lookup a protocol by its name
  *
  * @param[in] name of the protocol to locate.
@@ -3398,6 +3448,7 @@ fr_dict_enum_t *fr_dict_enum_by_value(fr_dict_attr_t const *da, fr_value_box_t c
 	 */
 	enumv.da = da;
 	enumv.alias = "";
+	enumv.alias_len = 0;
 
 	/*
 	 *	Look up the attribute alias target, and use
@@ -3441,7 +3492,7 @@ char const *fr_dict_enum_alias_by_value(fr_dict_attr_t const *da, fr_value_box_t
 /*
  *	Get a value by its name, keyed off of an attribute.
  */
-fr_dict_enum_t *fr_dict_enum_by_alias(fr_dict_attr_t const *da, char const *alias)
+fr_dict_enum_t *fr_dict_enum_by_alias(fr_dict_attr_t const *da, char const *alias, ssize_t len)
 {
 	fr_dict_enum_t	*found;
 	fr_dict_enum_t	find = {
@@ -3457,6 +3508,9 @@ fr_dict_enum_t *fr_dict_enum_by_alias(fr_dict_attr_t const *da, char const *alia
 		fr_strerror_printf("Attributes \"%s\" not present in any dictionaries", da->name);
 		return NULL;
 	}
+
+	if (len < 0) len = strlen(alias);
+	find.alias_len = (size_t)len;
 
 	/*
 	 *	Look up the attribute alias target, and use
@@ -3612,10 +3666,15 @@ static fr_dict_t *dict_alloc(TALLOC_CTX *ctx)
 	}
 
 	/*
-	 *	Pre-Allocate 5MB of pool memory for rapid startup
+	 *	Pre-Allocate 6MB of pool memory for rapid startup
+	 *	As that's the working memory required during
+	 *	dictionary initialisation.
 	 */
-	dict->pool = talloc_pool(dict, (1024 * 1024 * 5));
+	dict->pool = talloc_pool(dict, (1024 * 1024 * 6));
 	if (!dict->pool) goto error;
+
+	dict->fixup_pool = talloc_pool(dict, (1024 * 1024 * 1));
+	if (!dict->fixup_pool) goto error;
 
 	/*
 	 *	Create the table of vendor by name.   There MAY NOT
@@ -4042,7 +4101,7 @@ static int dict_read_process_value(fr_dict_t *dict, char **argv, int argc)
 	if (!da) {
 		dict_enum_fixup_t *fixup;
 
-		fixup = talloc_zero(dict->pool, dict_enum_fixup_t);
+		fixup = talloc_zero(dict->fixup_pool, dict_enum_fixup_t);
 		if (!fixup) {
 		oom:
 			talloc_free(fixup);
@@ -4899,7 +4958,7 @@ int fr_dict_from_file(fr_dict_t **out, char const *fn)
 	if (!defined_cast_types) {
 		FR_NAME_NUMBER const	*p;
 		fr_dict_attr_flags_t	flags;
-		char			*type_name;
+		char			*type_name = NULL;
 
 		memset(&flags, 0, sizeof(flags));
 
@@ -4908,7 +4967,10 @@ int fr_dict_from_file(fr_dict_t **out, char const *fn)
 		for (p = dict_attr_types; p->name; p++) {
 			fr_dict_attr_t *n;
 
-			type_name = talloc_typed_asprintf(dict->pool, "Tmp-Cast-%s", p->name);
+			/*
+			 *	Reduce holes in the main pool by using the fixup pool
+			 */
+			type_name = talloc_typed_asprintf(dict->fixup_pool, "Tmp-Cast-%s", p->name);
 
 			n = dict_attr_alloc(dict->pool, dict->root, type_name,
 					    FR_CAST_BASE + p->number, p->number, &flags);
@@ -4917,6 +4979,7 @@ int fr_dict_from_file(fr_dict_t **out, char const *fn)
 				talloc_free(dict);
 				return -1;
 			}
+			talloc_free(type_name);
 
 			if (!fr_hash_table_insert(dict->attributes_by_name, n)) goto error;
 
@@ -4924,8 +4987,6 @@ int fr_dict_from_file(fr_dict_t **out, char const *fn)
 			 *	Set up parenting for the attribute.
 			 */
 			if (dict_attr_child_add(dict->root, n) < 0) goto error;
-
-			talloc_free(type_name);
 		}
 		defined_cast_types = true;
 	}
@@ -4967,6 +5028,7 @@ int fr_dict_from_file(fr_dict_t **out, char const *fn)
 			dict->enum_fixup = next;
 		}
 	}
+	TALLOC_FREE(dict->fixup_pool);
 
 	/*
 	 *	Walk over all of the hash tables to ensure they're
@@ -5042,23 +5104,31 @@ int fr_dict_internal_afrom_file(fr_dict_t **out, char const *dict_subdir)
 	for (p = dict_attr_types; p->name; p++) {
 		fr_dict_attr_t *n;
 
-		type_name = talloc_typed_asprintf(dict->pool, "Tmp-Cast-%s", p->name);
+		/*
+		 *	Reduce holes in the main pool by using the fixup pool
+		 */
+		type_name = talloc_typed_asprintf(dict->fixup_pool, "Tmp-Cast-%s", p->name);
 
 		n = dict_attr_alloc(dict->pool, dict->root, type_name,
 				    FR_CAST_BASE + p->number, p->number, &flags);
-		if (!n) goto error;
+		if (!n) {
+			talloc_free(type_name);
+			goto error;
+		}
 
 		if (!fr_hash_table_insert(dict->attributes_by_name, n)) {
 			fr_strerror_printf("Failed inserting \"%s\" into internal dictionary", type_name);
+			talloc_free(type_name);
 			goto error;
 		}
+
+		talloc_free(type_name);
 
 		/*
 		 *	Set up parenting for the attribute.
 		 */
 		if (dict_attr_child_add(dict->root, n) < 0) goto error;
 
-		talloc_free(type_name);
 	}
 
 	if (dict_path && dict_from_file(dict, dict_path, FR_DICTIONARY_FILE, NULL, 0) < 0) goto error;
@@ -5142,6 +5212,7 @@ int fr_dict_protocol_afrom_file(fr_dict_t **out, char const *proto_name)
 		for (this = dict->enum_fixup; this != NULL; this = next) {
 			fr_value_box_t	value;
 			fr_type_t	type;
+			int		ret;
 
 			next = this->next;
 			da = fr_dict_attr_by_name(dict, this->attribute);
@@ -5158,7 +5229,10 @@ int fr_dict_protocol_afrom_file(fr_dict_t **out, char const *proto_name)
 				goto error;
 			}
 
-			if (fr_dict_enum_add_alias(da, this->alias, &value, false, false) < 0) goto error;
+			ret = fr_dict_enum_add_alias(da, this->alias, &value, false, false);
+			fr_value_box_clear(&value);
+
+			if (ret < 0) goto error;
 
 			/*
 			 *	Just so we don't lose track of things.
@@ -5166,6 +5240,7 @@ int fr_dict_protocol_afrom_file(fr_dict_t **out, char const *proto_name)
 			dict->enum_fixup = next;
 		}
 	}
+	TALLOC_FREE(dict->fixup_pool);
 
 	/*
 	 *	Walk over all of the hash tables to ensure they're
@@ -5298,7 +5373,7 @@ int fr_dict_autoload(fr_dict_autoload_t const *to_load)
  */
 void fr_dict_autofree(fr_dict_autoload_t const *to_free)
 {
-	fr_dict_t const			**dict;
+	fr_dict_t			**dict;
 	fr_dict_autoload_t const	*p = to_free;
 
 	for (p = to_free; p->out; p++) {
@@ -5315,8 +5390,12 @@ static void _fr_dict_dump(fr_dict_attr_t const *da, unsigned int lvl)
 	unsigned int		i;
 	size_t			len;
 	fr_dict_attr_t const	*p;
+	char			flags[256];
 
-	printf("%p - %s (%u) %s\n", da, da->name, da->attr, fr_int2str(dict_attr_types, da->type, "<INVALID>"));
+	fr_dict_snprint_flags(flags, sizeof(flags), &da->flags);
+
+	printf("[%02i] 0x%016" PRIxPTR "%*s %s(%u) %s %s\n", lvl, (unsigned long)da, lvl * 2, " ",
+	       da->name, da->attr, fr_int2str(dict_attr_types, da->type, "<INVALID>"), flags);
 
 	len = talloc_array_length(da->children);
 	for (i = 0; i < len; i++) {
@@ -5324,7 +5403,6 @@ static void _fr_dict_dump(fr_dict_attr_t const *da, unsigned int lvl)
 			_fr_dict_dump(p, lvl + 1);
 		}
 	}
-
 }
 
 void fr_dict_dump(fr_dict_t *dict)

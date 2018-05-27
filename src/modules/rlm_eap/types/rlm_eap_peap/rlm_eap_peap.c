@@ -73,8 +73,8 @@ static CONF_PARSER submodule_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t rlm_eap_peap_dict[];
 fr_dict_autoload_t rlm_eap_peap_dict[] = {
@@ -123,7 +123,7 @@ static int auth_type_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNU
 		cf_log_err(ci, "Failed adding %s alias", attr_auth_type->name);
 		return -1;
 	}
-	*((fr_dict_enum_t **)out) = fr_dict_enum_by_alias(attr_auth_type, auth_type);
+	*((fr_dict_enum_t **)out) = fr_dict_enum_by_alias(attr_auth_type, auth_type, -1);
 
 	return 0;
 }
@@ -152,11 +152,11 @@ static peap_tunnel_t *peap_alloc(TALLOC_CTX *ctx, rlm_eap_peap_t *inst)
  *	Do authentication, by letting EAP-TLS do most of the work.
  */
 static rlm_rcode_t CC_HINT(nonnull) mod_process(void *instance, eap_session_t *eap_session);
-static rlm_rcode_t mod_process(void *arg, eap_session_t *eap_session)
+static rlm_rcode_t mod_process(void *instance, eap_session_t *eap_session)
 {
 	int			rcode;
 	eap_tls_status_t	status;
-	rlm_eap_peap_t		*inst = (rlm_eap_peap_t *) arg;
+	rlm_eap_peap_t		*inst = (rlm_eap_peap_t *)instance;
 
 	eap_tls_session_t	*eap_tls_session = talloc_get_type_abort(eap_session->opaque, eap_tls_session_t);
 	tls_session_t		*tls_session = eap_tls_session->tls_session;
@@ -395,5 +395,5 @@ rlm_eap_submodule_t rlm_eap_peap = {
 	.instantiate	= mod_instantiate,
 
 	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process		/* Process next round of EAP method */
+	.entry_point	= mod_process		/* Process next round of EAP method */
 };

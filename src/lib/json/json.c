@@ -31,31 +31,54 @@
 /** Convert json object to fr_value_box_t
  *
  * @param[in] ctx	to allocate any value buffers in (should usually be the same as out).
- * @param[in] out	Where to write value_box.
+ * @param[in] out	Where to write value.  Must be initialised.
  * @param[in] object	to convert.
- * @param[in] dst_type	FreeRADIUS type to convert to.
- * @param[in] dst_enumv	Enumeration values to allow string to integer conversions.
+ * @param[in] enumv	Any string values are assumed to be in PRESENTATION format, meaning
+ *			that if an enumv is specified, they'll be checked against the list
+ *			of aliases for that enumeration, and possibly converted into one of
+ *			the enumeration values (which may not be a string).
+ * @param[in] tainted	Whether the data source is untrusted.
  * @return
  *	- 0 on success.
  *	- -1 on failure.
  */
 int fr_json_object_to_value_box(TALLOC_CTX *ctx, fr_value_box_t *out, json_object *object,
-				fr_type_t dst_type, fr_dict_attr_t const *dst_enumv)
+				fr_dict_attr_t const *enumv, bool tainted)
 {
-	fr_value_box_t in;
-
-	memset(&in, 0, sizeof(in));
-
 	switch (fr_json_object_get_type(object)) {
 	case json_type_string:
-		in.type = FR_TYPE_STRING;
-		in.vb_strvalue = json_object_get_string(object);
-		in.datum.length = json_object_get_string_len(object);
+	{
+		char const	*value;
+		size_t		len;
+		fr_dict_enum_t	*found;
+
+		value = json_object_get_string(object);
+		len = json_object_get_string_len(object);
+
+		if (!enumv) goto no_enumv;
+
+		if (fr_dict_valid_name(value, len) < 0) goto no_enumv;
+
+		/*
+		 *	If an alias exists, use that value instead
+		 */
+		found = fr_dict_enum_by_alias(enumv, value, len);
+		if (found) {
+			if (fr_value_box_copy(ctx, out, found->value) < 0) return -1;
+			return 0;
+		}
+
+	no_enumv:
+		/*
+		 *	Just copy the string to the box.
+		 */
+		fr_value_box_bstrndup(ctx, out, NULL, value, len, tainted);
+	}
 		break;
 
 	case json_type_double:
-		in.type = FR_TYPE_FLOAT64;
-		in.vb_float64 = json_object_get_double(object);
+		out->type = FR_TYPE_FLOAT64;
+		out->vb_float64 = json_object_get_double(object);
 		break;
 
 	case json_type_int:
@@ -65,63 +88,58 @@ int fr_json_object_to_value_box(TALLOC_CTX *ctx, fr_value_box_t *out, json_objec
 #else
 		int32_t num;
 #endif
-#ifndef HAVE_JSON_OBJECT_GET_INT64
-		if (dst_type == FR_TYPE_UINT64) {
-			fr_strerror_printf("64bit integers are not supported by linked json-c.  "
-					   "Upgrade to json-c > 0.10 to use this feature");
-			return -1;
-		}
-#endif
 
 #ifndef HAVE_JSON_OBJECT_GET_INT64
 		num = json_object_get_int(object);
 #else
 		num = json_object_get_int64(object);
 		if (num < INT32_MIN) {			/* 64bit signed*/
-			in.type = FR_TYPE_INT64;
-			in.vb_int64 = (int64_t) num;
+			out->type = FR_TYPE_INT64;
+			out->vb_int64 = (int64_t) num;
 		} else if (num > UINT32_MAX) {		/* 64bit unsigned */
-			in.type = FR_TYPE_UINT64;
-			in.vb_uint64 = (uint64_t) num;
+			out->type = FR_TYPE_UINT64;
+			out->vb_uint64 = (uint64_t) num;
 		} else
 #endif
 		if (num < INT16_MIN) {			/* 32bit signed */
-			in.type = FR_TYPE_INT32;
-			in.vb_int32 = (int32_t)num;
+			out->type = FR_TYPE_INT32;
+			out->vb_int32 = (int32_t)num;
 		} else if (num < INT8_MIN) {		/* 16bit signed */
-			in.type = FR_TYPE_INT16;
-			in.vb_int16 = (int16_t)num;
+			out->type = FR_TYPE_INT16;
+			out->vb_int16 = (int16_t)num;
 		} else if (num < 0) {			/* 8bit signed */
-			in.type = FR_TYPE_INT8;
-			in.vb_int8 = (int8_t)num;
+			out->type = FR_TYPE_INT8;
+			out->vb_int8 = (int8_t)num;
 		} else if (num > UINT16_MAX) {		/* 32bit unsigned */
-			in.type = FR_TYPE_UINT32;
-			in.vb_uint32 = (uint32_t) num;
+			out->type = FR_TYPE_UINT32;
+			out->vb_uint32 = (uint32_t) num;
 		} else if (num > UINT8_MAX) {		/* 16bit unsigned */
-			in.type = FR_TYPE_UINT16;
-			in.vb_uint16 = (uint16_t) num;
+			out->type = FR_TYPE_UINT16;
+			out->vb_uint16 = (uint16_t) num;
 		} else {				/* 8bit unsigned */
-			in.type = FR_TYPE_UINT8;
-			in.vb_uint8 = (uint8_t) num;
+			out->type = FR_TYPE_UINT8;
+			out->vb_uint8 = (uint8_t) num;
 		}
 	}
 		break;
 
 	case json_type_boolean:
-		in.type = FR_TYPE_BOOL;
-		in.datum.boolean = json_object_get_boolean(object);
+		out->type = FR_TYPE_BOOL;
+		out->datum.boolean = json_object_get_boolean(object);
 		break;
 
 	case json_type_null:
 	case json_type_array:
 	case json_type_object:
-		in.type = FR_TYPE_STRING;
-		in.vb_strvalue = json_object_to_json_string(object);
-		in.datum.length = strlen(in.vb_strvalue);
+	{
+		char const *value = json_object_to_json_string(object);
+
+		fr_value_box_bstrndup(ctx, out, NULL, value, strlen(value), tainted);
+	}
 		break;
 	}
 
-	if (fr_value_box_cast(ctx, out, dst_type, dst_enumv, &in) < 0) return -1;
+	out->tainted = tainted;
 
 	return 0;
 }
@@ -133,6 +151,18 @@ int fr_json_object_to_value_box(TALLOC_CTX *ctx, fr_value_box_t *out, json_objec
  */
 json_object *json_object_from_value_box(TALLOC_CTX *ctx, fr_value_box_t const *data)
 {
+	/*
+	 *	We're converting to PRESENTATION format
+	 *	so any attributes with enumeration values
+	 *	should be converted to string types.
+	 */
+	if (data->enumv) {
+		fr_dict_enum_t *enumv;
+
+		enumv = fr_dict_enum_by_value(data->enumv, data);
+		if (enumv) return json_object_new_string(enumv->alias);
+	}
+
 	switch (data->type) {
 	default:
 	do_string:
@@ -158,15 +188,32 @@ json_object *json_object_from_value_box(TALLOC_CTX *ctx, fr_value_box_t const *d
 	case FR_TYPE_UINT16:
 		return json_object_new_int(data->vb_uint16);
 
+#ifdef HAVE_JSON_OBJECT_GET_INT64
 	case FR_TYPE_UINT32:
 		return json_object_new_int64((int64_t)data->vb_uint64);	/* uint32_t (max) > int32_t (max) */
 
 	case FR_TYPE_UINT64:
 		if (data->vb_uint64 > INT64_MAX) goto do_string;
 		return json_object_new_int64(data->vb_uint64);
+#else
+	case FR_TYPE_UINT32:
+		if (data->vb_uint32 > INT32_MAX) goto do_string;
+		return json_object_new_in(data->vb_uint32);
+#endif
+
+	case FR_TYPE_INT8:
+		return json_object_new_int(data->vb_int8);
+
+	case FR_TYPE_INT16:
+		return json_object_new_int(data->vb_int16);
 
 	case FR_TYPE_INT32:
 		return json_object_new_int(data->vb_int32);
+
+#ifdef HAVE_JSON_OBJECT_GET_INT64
+	case FR_TYPE_INT64:
+		return json_object_new_int64(data->vb_int16);
+#endif
 	}
 }
 

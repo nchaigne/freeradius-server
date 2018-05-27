@@ -48,8 +48,8 @@ static CONF_PARSER submodule_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t rlm_eap_mschapv2_dict[];
 fr_dict_autoload_t rlm_eap_mschapv2_dict[] = {
@@ -124,7 +124,7 @@ static int auth_type_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNU
 		cf_log_err(ci, "Failed adding %s alias", attr_auth_type->name);
 		return -1;
 	}
-	*((fr_dict_enum_t **)out) = fr_dict_enum_by_alias(attr_auth_type, auth_type);
+	*((fr_dict_enum_t **)out) = fr_dict_enum_by_alias(attr_auth_type, auth_type, -1);
 
 	return 0;
 }
@@ -426,7 +426,7 @@ static rlm_rcode_t mod_process_auth_type(void *instance, eap_session_t *eap_sess
 /*
  *	Authenticate a previously sent challenge.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_process(void *arg, eap_session_t *eap_session)
+static rlm_rcode_t CC_HINT(nonnull) mod_process(void *instance, eap_session_t *eap_session)
 {
 	rlm_rcode_t		rcode;
 	int			ccode;
@@ -436,7 +436,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_process(void *arg, eap_session_t *eap_se
 	mschapv2_opaque_t	*data = talloc_get_type_abort(eap_session->opaque, mschapv2_opaque_t);
 	eap_round_t		*eap_round = eap_session->this_round;
 	VALUE_PAIR		*auth_challenge, *response, *name;
-	rlm_eap_mschapv2_t	*inst = (rlm_eap_mschapv2_t *) arg;
+	rlm_eap_mschapv2_t	*inst = (rlm_eap_mschapv2_t *)instance;
 	REQUEST			*request = eap_session->request;
 	CONF_SECTION		*unlang;
 
@@ -673,7 +673,7 @@ packet_ready:
 		 */
 		tunnel = talloc_zero(request, eap_tunnel_data_t);
 
-		tunnel->tls_session = arg;
+		tunnel->tls_session = instance;
 		tunnel->callback = mschap_postproxy;
 
 		/*
@@ -875,5 +875,5 @@ rlm_eap_submodule_t rlm_eap_mschapv2 = {
 	.instantiate	= mod_instantiate,	/* Create new submodule instance */
 
 	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process		/* Process next round of EAP method */
+	.entry_point	= mod_process		/* Process next round of EAP method */
 };

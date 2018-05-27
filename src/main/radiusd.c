@@ -66,8 +66,6 @@ RCSID("$Id$")
 char const	*radacct_dir = NULL;
 char const	*log_dir = NULL;
 
-bool		log_stripped_names;
-
 char const *radiusd_version = RADIUSD_VERSION_STRING_BUILD("FreeRADIUS");
 static pid_t radius_pid;
 
@@ -167,7 +165,7 @@ int main(int argc, char *argv[])
 	 *  directly, so we'll allocate a new context beneath it, and
 	 *  free that before any leak reports.
 	 */
-	TALLOC_CTX *autofree = talloc_init("main");
+	TALLOC_CTX *autofree = talloc_new(talloc_autofree_context());
 
 #ifdef OSFC2
 	set_auth_parameters(argc, argv);
@@ -209,6 +207,11 @@ int main(int argc, char *argv[])
 	default_log.dst = L_DST_NULL;
 	default_log.fd = -1;
 	main_config.log_file = NULL;
+
+	/*
+	 *	Set the default dictionary directory
+	 */
+	main_config.dict_dir = DICTDIR;
 
 	/*
 	 *  Set the panic action and enable other debugging facilities
@@ -310,9 +313,6 @@ int main(int argc, char *argv[])
 			main_config.spawn_workers = false;
 			main_config.daemonize = false;
 			rad_debug_lvl += 2;
-			main_config.log_auth = true;
-			main_config.log_auth_badpass = true;
-			main_config.log_auth_goodpass = true;
 	do_stdout:
 			fr_log_fp = stdout;
 			default_log.dst = L_DST_STDOUT;
@@ -413,7 +413,7 @@ int main(int argc, char *argv[])
 	 *  Must be called before display_version to ensure relevant engines are loaded.
 	 */
 #ifdef HAVE_OPENSSL_CRYPTO_H
-	if (fr_tls_init() < 0) fr_exit(EXIT_FAILURE);
+	if (tls_init() < 0) fr_exit(EXIT_FAILURE);
 #endif
 
 	/*
@@ -448,7 +448,7 @@ int main(int argc, char *argv[])
 	 *  Check for vulnerabilities in the version of libssl were linked against.
 	 */
 #if defined(HAVE_OPENSSL_CRYPTO_H) && defined(ENABLE_OPENSSL_VERSION_CHECK)
-	if (tls_global_version_check(main_config.allow_vulnerable_openssl) < 0) exit(EXIT_FAILURE);
+	if (tls_version_check(main_config.allow_vulnerable_openssl) < 0) exit(EXIT_FAILURE);
 #endif
 
 	/*
@@ -631,7 +631,7 @@ int main(int argc, char *argv[])
 	/*
 	 *  Redirect stderr/stdout as appropriate.
 	 */
-	if (log_init(&default_log, main_config.daemonize) < 0) fr_exit(EXIT_FAILURE);
+	if (log_global_init(&default_log, main_config.daemonize) < 0) fr_exit(EXIT_FAILURE);
 
 	/*
 	 *  Initialise the state rbtree (used to link multiple rounds of challenges).
@@ -828,7 +828,7 @@ int main(int argc, char *argv[])
 	 *	Frees request specific logging resources which is OK
 	 *	because all the requests will have been stopped.
 	 */
-	log_free();
+	log_global_free();
 
 	talloc_free(global_state);	/* Free state entries */
 
@@ -859,7 +859,7 @@ cleanup:
 	map_proc_free();
 
 #if defined(HAVE_OPENSSL_CRYPTO_H) && OPENSSL_VERSION_NUMBER < 0x10100000L
-	fr_tls_free();		/* Cleanup any memory alloced by OpenSSL and placed into globals */
+	tls_free();		/* Cleanup any memory alloced by OpenSSL and placed into globals */
 #endif
 
 	/*

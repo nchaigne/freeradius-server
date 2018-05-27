@@ -99,7 +99,7 @@ static void NEVER_RETURNS usage(void)
 	exit(EXIT_FAILURE);
 }
 
-static fr_io_final_t test_process(REQUEST *request, fr_io_action_t action)
+static fr_io_final_t test_process(UNUSED void const *inst, REQUEST *request, fr_io_action_t action)
 {
 	MPRINT1("\t\tPROCESS --- request %"PRIu64" action %d\n", request->number, action);
 	return FR_IO_REPLY;
@@ -130,7 +130,7 @@ static ssize_t test_encode(void const *instance, REQUEST *request, uint8_t *cons
 	return data_len;
 }
 
-static size_t test_nak(UNUSED void const *instance, UNUSED void *packet_ctx, uint8_t *const packet, size_t packet_len, uint8_t *reply, UNUSED size_t reply_len)
+static size_t test_nak(UNUSED void const *instance, void *packet_ctx, uint8_t *const packet, size_t packet_len, uint8_t *reply, UNUSED size_t reply_len)
 {
 	uint32_t number;
 
@@ -486,7 +486,7 @@ static void sig_ignore(int sig)
 int main(int argc, char *argv[])
 {
 	int c;
-	TALLOC_CTX	*autofree = talloc_init("main");
+	TALLOC_CTX	*autofree = talloc_autofree_context();
 
 	if (fr_time_start() < 0) {
 		fprintf(stderr, "Failed to start time: %s\n", strerror(errno));
@@ -562,7 +562,5 @@ int main(int argc, char *argv[])
 
 	close(kq_master);
 
-	talloc_free(autofree);
-
-	return 0;
+	exit(EXIT_SUCCESS);
 }

@@ -44,14 +44,14 @@ RCSID("$Id$")
  */
 char const *radacct_dir = NULL;
 char const *log_dir = NULL;
-bool log_stripped_names = false;
+
 
 static bool filedone = false;
 
 char const *radiusd_version = RADIUSD_VERSION_STRING_BUILD("unittest");
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t unit_test_module_dict[];
 fr_dict_autoload_t unit_test_module_dict[] = {
@@ -697,8 +697,9 @@ int main(int argc, char *argv[])
 	CONF_SECTION		*unlang;
 	char			*auth_type;
 
-	TALLOC_CTX		*thread_ctx = talloc_init("thread_ctx");
-	TALLOC_CTX		*autofree = talloc_init("autofree");
+	TALLOC_CTX		*autofree = talloc_autofree_context();
+	TALLOC_CTX		*thread_ctx = talloc_new(autofree);
+
 	fr_talloc_fault_setup();
 
 	/*
@@ -781,9 +782,6 @@ int main(int argc, char *argv[])
 
 			case 'X':
 				rad_debug_lvl += 2;
-				main_config.log_auth = true;
-				main_config.log_auth_badpass = true;
-				main_config.log_auth_goodpass = true;
 				break;
 
 			case 'x':
@@ -826,7 +824,7 @@ int main(int argc, char *argv[])
 		goto finish;
 	}
 
-	if (log_init(&default_log, false) < 0) {
+	if (log_global_init(&default_log, false) < 0) {
 		rcode = EXIT_FAILURE;
 		goto finish;
 	}
@@ -835,7 +833,7 @@ int main(int argc, char *argv[])
 	 *  Initialising OpenSSL once, here, is safer than having individual modules do it.
 	 */
 #ifdef HAVE_OPENSSL_CRYPTO_H
-	if (fr_tls_init() < 0) {
+	if (tls_init() < 0) {
 		rcode = EXIT_FAILURE;
 		goto finish;
 	}
@@ -1152,7 +1150,7 @@ finish:
 	/*
 	 *	Free request specific logging infrastructure
 	 */
-	log_free();
+	log_global_free();
 
 	/*
 	 *	Free xlat instance data, and call any detach methods
@@ -1199,11 +1197,6 @@ finish:
 	 *	Free the strerror buffer.
 	 */
 	fr_strerror_free();
-
-	/*
-	 *	Cleanup anything in the autofree ctx
-	 */
-	talloc_free(autofree);
 
 	return rcode;
 }

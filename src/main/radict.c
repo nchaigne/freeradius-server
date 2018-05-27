@@ -39,12 +39,14 @@ RCSID("$Id$")
 #endif
 #include <assert.h>
 
-fr_dict_t *dicts[255];
-fr_dict_t **dict_end = dicts;
+static fr_dict_t *dicts[255];
+static fr_dict_t **dict_end = dicts;
 
+DIAG_OFF(unused-macros)
 #define DEBUG2(fmt, ...)	if (fr_log_fp && (fr_debug_lvl > 2)) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
 #define DEBUG(fmt, ...)		if (fr_log_fp && (fr_debug_lvl > 1)) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
 #define INFO(fmt, ...)		if (fr_log_fp && (fr_debug_lvl > 0)) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
+DIAG_ON(unused-macros)
 
 static void usage(void)
 {
@@ -134,6 +136,49 @@ static void da_print_info_td(fr_dict_t const *dict, fr_dict_attr_t const *da)
 	       fr_int2str(dict_attr_types, da->type, "?Unknown?"), flags);
 }
 
+static void _fr_dict_export(uint64_t *count, uintptr_t *low, uintptr_t *high, fr_dict_attr_t const *da, unsigned int lvl)
+{
+	unsigned int		i;
+	size_t			len;
+	fr_dict_attr_t const	*p;
+	char			flags[256];
+
+	fr_dict_snprint_flags(flags, sizeof(flags), &da->flags);
+
+	/*
+	 *	Root attributes are allocated outside of the pool
+	 *	so it's not helpful to include them in the calculation.
+	 */
+	if (!da->flags.is_root) {
+		if (low && ((uintptr_t)da < *low)) {
+			*low = (uintptr_t)da;
+		}
+		if (high && ((uintptr_t)da > *high)) {
+			*high = (uintptr_t)da;
+		}
+
+		da_print_info_td(fr_dict_by_da(da), da);
+	}
+
+	if (count) (*count)++;
+
+	len = talloc_array_length(da->children);
+	for (i = 0; i < len; i++) {
+		for (p = da->children[i]; p; p = p->next) {
+			_fr_dict_export(count, low, high, p, lvl + 1);
+		}
+	}
+}
+
+static void fr_dict_export(uint64_t *count, uintptr_t *low, uintptr_t *high, fr_dict_t *dict)
+{
+	if (count) *count = 0;
+	if (low) *low = UINTPTR_MAX;
+	if (high) *high = 0;
+
+	_fr_dict_export(count, low, high, fr_dict_root(dict), 0);
+}
+
 int main(int argc, char *argv[])
 {
 	char const	*dict_dir = DICTDIR;
@@ -142,7 +187,7 @@ int main(int argc, char *argv[])
 	bool		found = false;
 	bool		export = false;
 
-	TALLOC_CTX	*autofree = talloc_init("main");
+	TALLOC_CTX	*autofree = talloc_autofree_context();
 
 #ifndef NDEBUG
 	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
@@ -214,7 +259,14 @@ int main(int argc, char *argv[])
 		fr_dict_t	**dict_p = dicts;
 
 		do {
-			fr_dict_dump(*dict_p);
+			uint64_t	count;
+			uintptr_t	high;
+			uintptr_t	low;
+
+			fr_dict_export(&count, &low, &high, *dict_p);
+			DEBUG2("Attribute count %" PRIu64, count);
+			DEBUG2("Memory allocd %zu (bytes)", talloc_total_size(*dict_p));
+			DEBUG2("Memory spread %zu (bytes)", (high - low));
 		} while (++dict_p < dict_end);
 	}
 
@@ -242,7 +294,5 @@ int main(int argc, char *argv[])
 	}
 
 finish:
-	talloc_free(autofree);
-
 	return found ? ret : 64;
 }

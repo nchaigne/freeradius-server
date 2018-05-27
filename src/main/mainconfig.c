@@ -122,16 +122,9 @@ static const CONF_PARSER initial_logging_config[] = {
  *
  **********************************************************************/
 static const CONF_PARSER log_config[] = {
-	{ FR_CONF_POINTER("stripped_names", FR_TYPE_BOOL, &log_stripped_names), .dflt = "no" },
-	{ FR_CONF_POINTER("auth", FR_TYPE_BOOL, &main_config.log_auth), .dflt = "no" },
-	{ FR_CONF_POINTER("auth_badpass", FR_TYPE_BOOL, &main_config.log_auth_badpass), .dflt = "no" },
-	{ FR_CONF_POINTER("auth_goodpass", FR_TYPE_BOOL, &main_config.log_auth_goodpass), .dflt = "no" },
-	{ FR_CONF_POINTER("msg_badpass", FR_TYPE_STRING, &main_config.auth_badpass_msg) },
-	{ FR_CONF_POINTER("msg_goodpass", FR_TYPE_STRING, &main_config.auth_goodpass_msg) },
 	{ FR_CONF_POINTER("colourise", FR_TYPE_BOOL, &do_colourise) },
 	{ FR_CONF_POINTER("timestamp", FR_TYPE_BOOL, &log_timestamp) },
 	{ FR_CONF_POINTER("use_utc", FR_TYPE_BOOL, &log_dates_utc) },
-	{ FR_CONF_POINTER("msg_denied", FR_TYPE_STRING, &main_config.denied_msg), .dflt = "You are already logged in - access denied" },
 #ifdef WITH_CONF_WRITE
 	{ FR_CONF_POINTER("write_dir", FR_TYPE_STRING, &main_config.write_dir), .dflt = NULL },
 #endif
@@ -196,10 +189,10 @@ static const CONF_PARSER server_config[] = {
 	 *	DON'T exist in radiusd.conf, then the previously parsed
 	 *	values for "log { foo = bar}" will be used.
 	 */
-	{ FR_CONF_POINTER("log_auth", FR_TYPE_BOOL | FR_TYPE_DEPRECATED, &main_config.log_auth) },
-	{ FR_CONF_POINTER("log_auth_badpass", FR_TYPE_BOOL | FR_TYPE_DEPRECATED, &main_config.log_auth_badpass) },
-	{ FR_CONF_POINTER("log_auth_goodpass", FR_TYPE_BOOL | FR_TYPE_DEPRECATED, &main_config.log_auth_goodpass) },
-	{ FR_CONF_POINTER("log_stripped_names", FR_TYPE_BOOL | FR_TYPE_DEPRECATED, &log_stripped_names) },
+	{ FR_CONF_DEPRECATED("log_auth", FR_TYPE_BOOL, NULL, NULL) },
+	{ FR_CONF_DEPRECATED("log_auth_badpass", FR_TYPE_BOOL, NULL, NULL) },
+	{ FR_CONF_DEPRECATED("log_auth_goodpass", FR_TYPE_BOOL, NULL, NULL ) },
+	{ FR_CONF_DEPRECATED("log_stripped_names", FR_TYPE_BOOL, NULL, NULL) },
 
 	CONF_PARSER_TERMINATOR
 };
@@ -256,9 +249,6 @@ static const CONF_PARSER switch_users_config[] = {
 	{ FR_CONF_POINTER("allow_core_dumps", FR_TYPE_BOOL | FR_TYPE_DEPRECATED, &main_config.allow_core_dumps) },
 	CONF_PARSER_TERMINATOR
 };
-
-
-extern const CONF_PARSER virtual_servers_on_read_config[];
 
 /** Callback to automatically load dictionaries required by modules
  *
@@ -736,14 +726,6 @@ int main_config_init(void)
 	INFO("Starting - reading configuration files ...");
 
 	/*
-	 *	We need to load the dictionaries before reading the
-	 *	configuration files.  This is because of the
-	 *	pre-compilation in conf_file.c.  That should probably
-	 *	be fixed to be done as a second stage.
-	 */
-	if (!main_config.dict_dir) main_config.dict_dir = talloc_typed_strdup(NULL, DICTDIR);
-
-	/*
 	 *	About sizeof(REQUEST) + sizeof(RADIUS_PACKET) * 2 + sizeof(VALUE_PAIR) * 400
 	 *
 	 *	Which should be enough for many configurations.
@@ -751,8 +733,10 @@ int main_config_init(void)
 	main_config.talloc_pool_size = 8 * 1024; /* default */
 
 	/*
-	 *	Read the distribution dictionaries first, then
-	 *	the ones in raddb.
+	 *	We need to load the dictionaries before reading the
+	 *	configuration files.  This is because of the
+	 *	pre-compilation in conf_file.c.  That should probably
+	 *	be fixed to be done as a second stage.
 	 */
 	DEBUG2("Including dictionary file \"%s/%s\"", main_config.dict_dir, FR_DICTIONARY_FILE);
 	if (fr_dict_from_file(&main_config.dict, FR_DICTIONARY_FILE) != 0) {
@@ -919,8 +903,7 @@ do {\
 			return -1;
 		}
 
-		default_log.dst = fr_str2int(log_str2dst, log_dest,
-					      L_DST_NUM_DEST);
+		default_log.dst = fr_str2int(log_str2dst, log_dest, L_DST_NUM_DEST);
 		if (default_log.dst == L_DST_NUM_DEST) {
 			fprintf(stderr, "%s: Error: Unknown log_destination %s\n",
 				main_config.name, log_dest);

@@ -69,8 +69,8 @@ static CONF_PARSER const proto_detail_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t proto_detail_dict[];
 fr_dict_autoload_t proto_detail_dict[] = {
@@ -120,7 +120,7 @@ static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PAR
 	 *	Allow the process module to be specified by
 	 *	packet type.
 	 */
-	type_enum = fr_dict_enum_by_alias(attr_packet_type, type_str);
+	type_enum = fr_dict_enum_by_alias(attr_packet_type, type_str, -1);
 	if (!type_enum) {
 		cf_log_err(ci, "Invalid type \"%s\"", type_str);
 		return -1;
@@ -386,7 +386,7 @@ static ssize_t mod_encode(UNUSED void const *instance, REQUEST *request, uint8_t
 	return 1;
 }
 
-static void mod_process_set(void const *instance, REQUEST *request)
+static void mod_entry_point_set(void const *instance, REQUEST *request)
 {
 	proto_detail_t const *inst = talloc_get_type_abort_const(instance, proto_detail_t);
 	fr_app_process_t const *app_process;
@@ -397,7 +397,7 @@ static void mod_process_set(void const *instance, REQUEST *request)
 	app_process = (fr_app_process_t const *)inst->type_submodule->module->common;
 
 	request->server_cs = inst->server_cs;
-	request->async->process = app_process->process;
+	request->async->process = app_process->entry_point;
 }
 
 /** Open listen sockets/connect to external event source
@@ -536,7 +536,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 		 *	function.  The only difference is what kind of
 		 *	packet is created.
 		 */
-		inst->code = fr_dict_enum_by_alias(attr_packet_type, cf_pair_value(cp))->value->vb_uint32;
+		inst->code = fr_dict_enum_by_alias(attr_packet_type, cf_pair_value(cp), -1)->value->vb_uint32;
 		break;
 	}
 
@@ -688,16 +688,16 @@ static int mod_detach(void *instance)
 }
 
 fr_app_t proto_detail = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "detail",
-	.config		= proto_detail_config,
-	.inst_size	= sizeof(proto_detail_t),
+	.magic			= RLM_MODULE_INIT,
+	.name			= "detail",
+	.config			= proto_detail_config,
+	.inst_size		= sizeof(proto_detail_t),
 
-	.bootstrap	= mod_bootstrap,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach,
-	.open		= mod_open,
-	.decode		= mod_decode,
-	.encode		= mod_encode,
-	.process_set	= mod_process_set
+	.bootstrap		= mod_bootstrap,
+	.instantiate		= mod_instantiate,
+	.detach			= mod_detach,
+	.open			= mod_open,
+	.decode			= mod_decode,
+	.encode			= mod_encode,
+	.entry_point_set	= mod_entry_point_set
 };

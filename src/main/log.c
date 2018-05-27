@@ -160,7 +160,7 @@ const FR_NAME_NUMBER log_str2dst[] = {
 
 static char const spaces[] = "                                                                                                                        ";
 
-static fr_dict_t const *dict_freeradius;
+static fr_dict_t *dict_freeradius;
 
 extern fr_dict_autoload_t log_dict[];
 fr_dict_autoload_t log_dict[] = {
@@ -786,7 +786,7 @@ void log_fatal(char const *fmt, ...)
  *	- 0 on success.
  *	- -1 on failure.
  */
-int log_init(fr_log_t *log, bool daemonize)
+int log_global_init(fr_log_t *log, bool daemonize)
 {
 	int ret;
 
@@ -806,7 +806,7 @@ int log_init(fr_log_t *log, bool daemonize)
 	return ret;
 }
 
-void log_free(void)
+void log_global_free(void)
 {
 	fr_dict_autofree(log_dict);
 }

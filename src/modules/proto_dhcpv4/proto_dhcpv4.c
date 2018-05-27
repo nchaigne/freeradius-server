@@ -71,7 +71,7 @@ static CONF_PARSER const proto_dhcpv4_config[] = {
 };
 
 
-static fr_dict_t const *dict_dhcpv4;
+static fr_dict_t *dict_dhcpv4;
 
 extern fr_dict_autoload_t proto_dhcpv4_dict[];
 fr_dict_autoload_t proto_dhcpv4_dict[] = {
@@ -160,7 +160,7 @@ static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PAR
 	 *	Allow the process module to be specified by
 	 *	packet type.
 	 */
-	type_enum = fr_dict_enum_by_alias(attr_dhcpv4_message_type, type_str);
+	type_enum = fr_dict_enum_by_alias(attr_dhcpv4_message_type, type_str, -1);
 	if (!type_enum) {
 		cf_log_err(ci, "Invalid type \"%s\"", type_str);
 		return -1;
@@ -260,7 +260,7 @@ static int transport_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CON
 /** Decode the packet
  *
  */
-static int mod_decode(UNUSED void const *instance, UNUSED REQUEST *request, UNUSED uint8_t *const data, UNUSED size_t data_len)
+static int mod_decode(void const *instance, REQUEST *request, uint8_t *const data, size_t data_len)
 {
 	proto_dhcpv4_t const *inst = talloc_get_type_abort_const(instance, proto_dhcpv4_t);
 	fr_io_track_t const *track = talloc_get_type_abort_const(request->async->packet_ctx, fr_io_track_t);
@@ -330,7 +330,7 @@ static int mod_decode(UNUSED void const *instance, UNUSED REQUEST *request, UNUS
 	return inst->io.app_io->decode(inst->io.app_io_instance, request, data, data_len);
 }
 
-static ssize_t mod_encode(UNUSED void const *instance, UNUSED REQUEST *request, UNUSED uint8_t *buffer, UNUSED size_t buffer_len)
+static ssize_t mod_encode(void const *instance, REQUEST *request, uint8_t *buffer, size_t buffer_len)
 {
 	proto_dhcpv4_t const *inst = talloc_get_type_abort_const(instance, proto_dhcpv4_t);
 	fr_io_track_t const *track = talloc_get_type_abort_const(request->async->packet_ctx, fr_io_track_t);
@@ -413,11 +413,11 @@ static ssize_t mod_encode(UNUSED void const *instance, UNUSED REQUEST *request, 
 	return data_len;
 }
 
-static void mod_process_set(void const *instance, REQUEST *request)
+static void mod_entry_point_set(void const *instance, REQUEST *request)
 {
-	proto_dhcpv4_t const *inst = talloc_get_type_abort_const(instance, proto_dhcpv4_t);
-	fr_io_process_t process;
-	fr_io_track_t *track = request->async->packet_ctx;
+	proto_dhcpv4_t const	*inst = talloc_get_type_abort_const(instance, proto_dhcpv4_t);
+	dl_instance_t		*type_submodule;
+	fr_io_track_t		*track = request->async->packet_ctx;
 
 	rad_assert(request->packet->code != 0);
 	rad_assert(request->packet->code < FR_DHCP_MAX);
@@ -432,22 +432,23 @@ static void mod_process_set(void const *instance, REQUEST *request)
 
 		app_process = (fr_app_process_t const *) inst->dynamic_submodule->module->common;
 
-		request->async->process = app_process->process;
+		request->async->process = app_process->entry_point;
 		track->dynamic = 0;
 		return;
 	}
 
-	process = inst->process_by_code[request->packet->code];
-	if (!process) {
-		REDEBUG("proto_dhcpv4 - No module available to handle packet code %i", request->packet->code);
+	type_submodule = inst->type_submodule_by_code[request->packet->code];
+	if (!type_submodule) {
+		REDEBUG("No module available to handle packet code %i", request->packet->code);
 		return;
 	}
 
-	request->async->process = process;
+	request->async->process = ((fr_app_process_t const *)type_submodule->module->common)->entry_point;
+	request->async->process_inst = type_submodule->data;
 }
 
 
-static int mod_priority(void const *instance, uint8_t const *buffer, UNUSED size_t buflen)
+static int mod_priority_set(void const *instance, uint8_t const *buffer, UNUSED size_t buflen)
 {
 	proto_dhcpv4_t const *inst = talloc_get_type_abort_const(instance, proto_dhcpv4_t);
 
@@ -459,7 +460,7 @@ static int mod_priority(void const *instance, uint8_t const *buffer, UNUSED size
 	 */
 	if (!inst->priorities[buffer[0]]) return 0;
 
-	if (!inst->process_by_code[buffer[0]]) return -1;
+	if (!inst->type_submodule_by_code[buffer[0]]) return -1;
 
 	/*
 	 *	@todo - if we cared, we could also return -1 for "this
@@ -603,7 +604,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 		 *	Check that the packet type is known.
 		 */
 		packet_type = cf_section_name2(subcs);
-		dv = fr_dict_enum_by_alias(attr_dhcpv4_message_type, packet_type);
+		dv = fr_dict_enum_by_alias(attr_dhcpv4_message_type, packet_type, -1);
 		if (!dv || ((dv->value->vb_uint32 > FR_DHCP_MAX) &&
 			    (dv->value->vb_uint32 == FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND))) {
 			cf_log_err(subcs, "Invalid DHCPV4 packet type in '%s %s {...}'",
@@ -666,7 +667,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 		if (!fr_cond_assert(enumv)) return -1;
 
 		code = enumv->value->vb_uint32;
-		inst->process_by_code[code] = app_process->process;	/* Store the process function */
+		inst->type_submodule_by_code[code] = inst->type_submodule[i];
 
 		rad_assert(inst->code_allowed[code] == true);
 		i++;
@@ -780,7 +781,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 			rad_assert(inst->io.server_cs);	/* Ensure we don't leak memory */
 
 			process_p = talloc(inst->io.server_cs, fr_io_process_t);
-			*process_p = app_process->process;
+			*process_p = app_process->entry_point;
 
 			(void) cf_data_add(inst->io.server_cs, process_p, value, NULL);
 		}
@@ -874,19 +875,19 @@ static void mod_unload(void)
 }
 
 fr_app_t proto_dhcpv4 = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "dhcpv4",
-	.config		= proto_dhcpv4_config,
-	.inst_size	= sizeof(proto_dhcpv4_t),
+	.magic			= RLM_MODULE_INIT,
+	.name			= "dhcpv4",
+	.config			= proto_dhcpv4_config,
+	.inst_size		= sizeof(proto_dhcpv4_t),
 
-	.load		= mod_load,
-	.unload		= mod_unload,
+	.load			= mod_load,
+	.unload			= mod_unload,
 
-	.bootstrap	= mod_bootstrap,
-	.instantiate	= mod_instantiate,
-	.open		= mod_open,
-	.decode		= mod_decode,
-	.encode		= mod_encode,
-	.process_set	= mod_process_set,
-	.priority	= mod_priority
+	.bootstrap		= mod_bootstrap,
+	.instantiate		= mod_instantiate,
+	.open			= mod_open,
+	.decode			= mod_decode,
+	.encode			= mod_encode,
+	.entry_point_set	= mod_entry_point_set,
+	.priority		= mod_priority_set
 };

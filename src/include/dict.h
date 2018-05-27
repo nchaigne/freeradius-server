@@ -116,6 +116,8 @@ typedef struct {
 typedef struct {
 	fr_dict_attr_t const	*da;				//!< Dictionary attribute enum is associated with.
 	char const		*alias;				//!< Enum name.
+	size_t			alias_len;			//!< Allows for efficient alias lookups when operating
+								///< on partial buffers.
 	fr_value_box_t const	*value;				//!< Enum value (what name maps to).
 } fr_dict_enum_t;
 
@@ -140,7 +142,7 @@ typedef struct {
 typedef struct {
 	fr_dict_attr_t const	**out;				//!< Where to write a pointer to the resolved
 								//!< #fr_dict_attr_t.
-	fr_dict_t const		**dict;				//!< The protocol dictionary the attribute should
+	fr_dict_t		**dict;				//!< The protocol dictionary the attribute should
 								///< be resolved in. ** so it's a compile time
 								///< constant.
 	char const		*name;				//!< of the attribute.
@@ -151,7 +153,7 @@ typedef struct {
  *
  */
 typedef struct {
-	fr_dict_t const		**out;				//!< Where to write a pointer to the loaded/resolved
+	fr_dict_t		**out;				//!< Where to write a pointer to the loaded/resolved
 								//!< #fr_dict_t.
 	char const		*base_dir;			//!< Directory structure beneath share.
 	char const		*proto;				//!< The protocol dictionary name.
@@ -256,6 +258,8 @@ ssize_t			fr_dict_attr_by_oid(fr_dict_t *dict, fr_dict_attr_t const **parent,
  */
 fr_dict_attr_t const	*fr_dict_root(fr_dict_t const *dict);
 
+fr_dict_t		*fr_dict_by_protocol_substr(char const **name);
+
 fr_dict_t		*fr_dict_by_protocol_name(char const *name);
 
 fr_dict_t		*fr_dict_by_protocol_num(unsigned int num);
@@ -325,7 +329,7 @@ fr_dict_enum_t		*fr_dict_enum_by_value(fr_dict_attr_t const *da, fr_value_box_t 
 
 char const		*fr_dict_enum_alias_by_value(fr_dict_attr_t const *da, fr_value_box_t const *value);
 
-fr_dict_enum_t		*fr_dict_enum_by_alias(fr_dict_attr_t const *da, char const *alias);
+fr_dict_enum_t		*fr_dict_enum_by_alias(fr_dict_attr_t const *da, char const *alias, ssize_t len);
 /** @} */
 
 /** @name Dictionary and protocol loading

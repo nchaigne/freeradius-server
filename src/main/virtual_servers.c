@@ -149,7 +149,6 @@ const CONF_PARSER virtual_servers_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-
 /** dl_open a proto_* module
  *
  * @param[in] ctx	to allocate data in.
@@ -195,7 +194,6 @@ static int server_on_read(UNUSED TALLOC_CTX *ctx, UNUSED void *out, UNUSED CONF_
 
 	return 0;
 }
-
 
 /** dl_open a proto_* module
  *
@@ -403,7 +401,7 @@ int virtual_server_section_attribute_define(CONF_SECTION *server_cs, char const 
 		 *	If the value already exists, don't
 		 *	create it again.
 		 */
-		dv = fr_dict_enum_by_alias(da, name2);
+		dv = fr_dict_enum_by_alias(da, name2, -1);
 		if (dv) continue;
 
 		cf_log_debug(subcs, "Creating %s = %s", da->name, name2);
@@ -746,5 +744,5 @@ void fr_request_async_bootstrap(REQUEST *request, fr_event_list_t *el)
 
 	request->async->listen = NULL;
 	request->async->packet_ctx = NULL;
-	listener[0]->app->process_set(listener[0]->proto_module->data, request);
+	listener[0]->app->entry_point_set(listener[0]->proto_module->data, request);
 }

@@ -31,7 +31,7 @@
 #include <freeradius-devel/rad_assert.h>
 #include "proto_detail.h"
 
-static fr_dict_t const *dict_freeradius;
+static fr_dict_t *dict_freeradius;
 
 extern fr_dict_autoload_t proto_detail_process_dict[];
 fr_dict_autoload_t proto_detail_process_dict[] = {
@@ -48,7 +48,7 @@ fr_dict_attr_autoload_t proto_detail_process_dict_attr[] = {
 	{ NULL }
 };
 
-static fr_io_final_t mod_process(REQUEST *request, fr_io_action_t action)
+static fr_io_final_t mod_process(UNUSED void const *instance, REQUEST *request, fr_io_action_t action)
 {
 	VALUE_PAIR		*vp;
 	rlm_rcode_t		rcode;
@@ -237,5 +237,5 @@ fr_app_process_t proto_detail_process = {
 	.name		= "detail_process",
 	.inst_size	= sizeof(proto_detail_process_t),
 	.instantiate	= mod_instantiate,
-	.process	= mod_process,
+	.entry_point	= mod_process,
 };

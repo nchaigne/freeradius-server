@@ -64,7 +64,7 @@ static int			my_port;
 static char const		*secret = "testing123";
 static fr_test_packet_ctx_t	tpc;
 
-static fr_io_final_t test_process(REQUEST *request, fr_io_action_t action)
+static fr_io_final_t test_process(UNUSED void const *instance, REQUEST *request, fr_io_action_t action)
 {
 	MPRINT1("\t\tPROCESS --- request %"PRIu64" action %d\n", request->number, action);
 	return FR_IO_REPLY;
@@ -195,13 +195,13 @@ static fr_app_io_t app_io = {
 	.decode = test_decode
 };
 
-static void process_set(UNUSED void const *ctx, REQUEST *request)
+static void entry_point_set(UNUSED void const *ctx, REQUEST *request)
 {
 	request->async->process = test_process;
 }
 
 static fr_app_t test_app = {
-	.process_set = process_set,
+	.entry_point_set = entry_point_set,
 };
 
 static void NEVER_RETURNS usage(void)
@@ -221,7 +221,7 @@ int main(int argc, char *argv[])
 	int			num_networks = 1;
 	int			num_workers = 2;
 	uint16_t		port16 = 0;
-	TALLOC_CTX		*autofree = talloc_init("main");
+	TALLOC_CTX		*autofree = talloc_autofree_context();
 	fr_schedule_t		*sched;
 	fr_listen_t		listen = { .app_io = &app_io, .app = &test_app };
 	fr_listen_test_t	*app_io_inst;
@@ -306,7 +306,5 @@ int main(int argc, char *argv[])
 
 	(void) fr_schedule_destroy(sched);
 
-	talloc_free(autofree);
-
-	return 0;
+	exit(EXIT_SUCCESS);
 }

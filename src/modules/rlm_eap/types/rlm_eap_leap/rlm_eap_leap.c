@@ -28,8 +28,8 @@ RCSID("$Id$")
 
 #include "eap_leap.h"
 
-static fr_dict_t const *dict_freeradius;
-static fr_dict_t const *dict_radius;
+static fr_dict_t *dict_freeradius;
+static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t rlm_eap_leap_dict[];
 fr_dict_autoload_t rlm_eap_leap_dict[] = {
@@ -213,5 +213,5 @@ rlm_eap_submodule_t rlm_eap_leap = {
 
 	.provides	= { FR_EAP_LEAP },
 	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process		/* Process next round of EAP method */
+	.entry_point	= mod_process		/* Process next round of EAP method */
 };
