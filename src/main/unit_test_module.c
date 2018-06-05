@@ -81,6 +81,7 @@ static fr_dict_attr_t const *attr_packet_type;
 static fr_dict_attr_t const *attr_response_packet_type;
 static fr_dict_attr_t const *attr_chap_password;
 static fr_dict_attr_t const *attr_digest_attributes;
+static fr_dict_attr_t const *attr_state;
 static fr_dict_attr_t const *attr_user_name;
 static fr_dict_attr_t const *attr_user_password;
 
@@ -107,6 +108,7 @@ fr_dict_attr_autoload_t unit_test_module_dict_attr[] = {
 	{ .out = &attr_response_packet_type, .name = "Response-Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
 	{ .out = &attr_chap_password, .name = "CHAP-Password", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
 	{ .out = &attr_digest_attributes, .name = "Digest-Attributes", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
+	{ .out = &attr_state, .name = "State", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
 	{ .out = &attr_user_name, .name = "User-Name", .type = FR_TYPE_STRING, .dict = &dict_radius },
 	{ .out = &attr_user_password, .name = "User-Password", .type = FR_TYPE_STRING, .dict = &dict_radius },
 	{ NULL }
@@ -893,7 +895,7 @@ int main(int argc, char *argv[])
 	/*
 	 *	Initialise the interpreter, registering operations.
 	 */
-	if (unlang_initialize() < 0) exit(EXIT_FAILURE);
+	if (unlang_init() < 0) exit(EXIT_FAILURE);
 
 	/*
 	 *	Initialize Auth-Type, etc. in the virtual servers
@@ -942,7 +944,7 @@ int main(int argc, char *argv[])
 	if (modules_thread_instantiate(thread_ctx, main_config.config, el) < 0) goto exit_failure;
 	if (xlat_thread_instantiate(thread_ctx) < 0) goto exit_failure;
 
-	state = fr_state_tree_init(NULL, main_config.max_requests * 2, 10);
+	state = fr_state_tree_init(autofree, attr_state, 256, 10);
 
 	/*
 	 *  Set the panic action (if required)
@@ -1025,6 +1027,16 @@ int main(int argc, char *argv[])
 		if (fr_pair_list_afrom_file(request, &filter_vps, fp, &filedone) < 0) {
 			fprintf(stderr, "Failed reading attributes from %s: %s\n",
 				filter_file, fr_strerror());
+			rcode = EXIT_FAILURE;
+			goto finish;
+		}
+
+		/*
+		 *	Filter files can't be empty.
+		 */
+		if (!filter_vps) {
+			fprintf(stderr, "No attributes in filter file %s\n",
+				filter_file);
 			rcode = EXIT_FAILURE;
 			goto finish;
 		}
@@ -1181,6 +1193,11 @@ finish:
 	 *	The only maps remaining are the ones registered by the server core.
 	 */
 	map_proc_free();
+
+	/*
+	 *	Free any resources used by the unlang interpreter.
+	 */
+	unlang_free();
 
 	/*
 	 *	And now nothing should be left anywhere except the

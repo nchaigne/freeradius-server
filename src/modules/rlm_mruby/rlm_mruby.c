@@ -366,7 +366,11 @@ static void add_vp_tuple(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vps, mr
 		}
 		DEBUG("%s: %s %s %s", function_name, ckey, fr_int2str(fr_tokens_table, op, "="), cval);
 
-		if (tmpl_afrom_attr_str(request, &dst, ckey, REQUEST_CURRENT, PAIR_LIST_REPLY, false, false) <= 0) {
+		if (tmpl_afrom_attr_str(request, &dst, ckey,
+					&(vp_tmpl_rules_t){
+						.dict_def = request->dict,
+						.list_def = PAIR_LIST_REPLY
+					}) <= 0) {
 			ERROR("Failed to find attribute %s", ckey);
 			continue;
 		}
@@ -386,7 +390,7 @@ static void add_vp_tuple(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vps, mr
 		talloc_free(dst);
 
 		vp->op = op;
-		if (fr_pair_value_from_str(vp, cval, -1) < 0) {
+		if (fr_pair_value_from_str(vp, cval, -1, '\0', false) < 0) {
 			REDEBUG("%s: %s %s %s failed", function_name, ckey, fr_int2str(fr_tokens_table, op, "="), cval);
 		} else {
 			DEBUG("%s: %s %s %s OK", function_name, ckey, fr_int2str(fr_tokens_table, op, "="), cval);

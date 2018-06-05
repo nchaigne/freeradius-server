@@ -788,7 +788,10 @@ static int pending_free(fr_io_pending_packet_t *pending)
 	 *	delete it.
 	 */
 	if (track->packets == 0) {
-		if (track->client->inst->app_io->track_duplicates) (void) rbtree_deletebydata(track->client->table, track);
+		if (track->client->inst->app_io->track_duplicates) {
+			rad_assert(track->client->table != NULL);
+			(void) rbtree_deletebydata(track->client->table, track);
+		}
 
 		// @todo - put this into a slab allocator
 		talloc_free(track);
@@ -1804,8 +1807,8 @@ static void packet_expiry_timer(fr_event_list_t *el, struct timeval *now, void *
 	}
 }
 
-static ssize_t mod_write(void *instance, void *packet_ctx,
-			 fr_time_t request_time, uint8_t *buffer, size_t buffer_len)
+static ssize_t mod_write(void *instance, void *packet_ctx, fr_time_t request_time,
+			 uint8_t *buffer, size_t buffer_len, size_t written)
 {
 	fr_io_instance_t *inst;
 	fr_io_connection_t *connection;
@@ -1857,8 +1860,8 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 		 *	has timed out, and we don't respond.
 		 */
 		if (buffer_len < 20) {
-			packet_expiry_timer(connection ? connection->el : inst->el, NULL, track);
 			track->reply_len = 1; /* don't respond */
+			packet_expiry_timer(connection ? connection->el : inst->el, NULL, track);
 			return buffer_len;
 		}
 
@@ -1868,7 +1871,7 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 		 */
 
 		packet_len = inst->app_io->write(app_io_instance, track, request_time,
-						 buffer, buffer_len);
+						 buffer, buffer_len, written);
 		if (packet_len > 0) {
 			rad_assert(buffer_len == (size_t) packet_len);
 			MEM(track->reply = talloc_memdup(track, buffer, buffer_len));
@@ -1909,8 +1912,8 @@ static ssize_t mod_write(void *instance, void *packet_ctx,
 	 */
 	if (buffer_len == 1) {
 		client->state = PR_CLIENT_NAK;
-		if (client->table) talloc_free(client->table);
 		talloc_free(client->pending);
+		if (client->table) TALLOC_FREE(client->table);
 		rad_assert(client->packets == 0);
 
 		/*

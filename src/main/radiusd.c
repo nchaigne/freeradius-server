@@ -559,7 +559,7 @@ int main(int argc, char *argv[])
 	/*
 	 *	Initialise the interpreter, registering operations.
 	 */
-	if (unlang_initialize() < 0) exit(EXIT_FAILURE);
+	if (unlang_init() < 0) exit(EXIT_FAILURE);
 
 	/*
 	 *	Initialize Auth-Type, etc. in the virtual servers
@@ -632,11 +632,6 @@ int main(int argc, char *argv[])
 	 *  Redirect stderr/stdout as appropriate.
 	 */
 	if (log_global_init(&default_log, main_config.daemonize) < 0) fr_exit(EXIT_FAILURE);
-
-	/*
-	 *  Initialise the state rbtree (used to link multiple rounds of challenges).
-	 */
-	global_state = fr_state_tree_init(autofree, main_config.max_requests * 2, main_config.continuation_timeout);
 
 	/*
 	 *	Start the network / worker threads.
@@ -830,8 +825,6 @@ int main(int argc, char *argv[])
 	 */
 	log_global_free();
 
-	talloc_free(global_state);	/* Free state entries */
-
 cleanup:
 	/*
 	 *	Free xlat instance data, and call any detach methods
@@ -857,6 +850,11 @@ cleanup:
 	 *	The only maps remaining are the ones registered by the server core.
 	 */
 	map_proc_free();
+
+	/*
+	 *	Free any resources used by the unlang interpreter.
+	 */
+	unlang_free();
 
 #if defined(HAVE_OPENSSL_CRYPTO_H) && OPENSSL_VERSION_NUMBER < 0x10100000L
 	tls_free();		/* Cleanup any memory alloced by OpenSSL and placed into globals */

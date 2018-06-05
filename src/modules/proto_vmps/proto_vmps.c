@@ -31,8 +31,18 @@
 #include "proto_vmps.h"
 
 extern fr_app_t proto_vmps;
+static int priority_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule);
 static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, CONF_PARSER const *rule);
 static int transport_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, CONF_PARSER const *rule);
+
+static const CONF_PARSER priority_config[] = {
+	{ FR_CONF_OFFSET("VMPS-Join-Request", FR_TYPE_UINT32, proto_vmps_t, priorities[FR_VMPS_PACKET_TYPE_VALUE_VMPS_JOIN_REQUEST]),
+	   .func = priority_parse, .dflt = "low" },
+	{ FR_CONF_OFFSET("VMPS-Reconfirm-Request", FR_TYPE_UINT32, proto_vmps_t, priorities[FR_VMPS_PACKET_TYPE_VALUE_VMPS_RECONFIRM_REQUEST]),
+	   .func = priority_parse, .dflt = "low" },
+
+	CONF_PARSER_TERMINATOR
+};
 
 static CONF_PARSER const limit_config[] = {
 	{ FR_CONF_OFFSET("idle_timeout", FR_TYPE_TIMEVAL, proto_vmps_t, io.idle_timeout), .dflt = "30.0" } ,
@@ -61,25 +71,7 @@ static CONF_PARSER const proto_vmps_config[] = {
 	  .func = transport_parse },
 
 	{ FR_CONF_POINTER("limit", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) limit_config },
-
-	CONF_PARSER_TERMINATOR
-};
-
-
-/*
- *	Allow configurable priorities for each listener.
- */
-static uint32_t priorities[FR_MAX_VMPS_CODE] = {
-	[FR_VMPS_PACKET_TYPE_VALUE_VMPS_JOIN_REQUEST] = PRIORITY_LOW,
-	[FR_VMPS_PACKET_TYPE_VALUE_VMPS_RECONFIRM_REQUEST] = PRIORITY_LOW,
-};
-
-static const CONF_PARSER priority_config[] = {
-	{ FR_CONF_OFFSET("VMPS-Join-Request", FR_TYPE_UINT32, proto_vmps_t, priorities[FR_VMPS_PACKET_TYPE_VALUE_VMPS_JOIN_REQUEST]),
-	  .dflt = STRINGIFY(PRIORITY_LOW) },
-	{ FR_CONF_OFFSET("VMPS-Reconfirm-Request", FR_TYPE_UINT32, proto_vmps_t, priorities[FR_VMPS_PACKET_TYPE_VALUE_VMPS_RECONFIRM_REQUEST]),
-	  .dflt = STRINGIFY(PRIORITY_LOW) },
-
+	{ FR_CONF_POINTER("priority", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) priority_config },
 	CONF_PARSER_TERMINATOR
 };
 
@@ -99,6 +91,16 @@ fr_dict_attr_autoload_t proto_vmps_dict_attr[] = {
 	{ NULL }
 };
 
+static int priority_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule)
+{
+	int32_t priority;
+
+	if (cf_pair_in_table(&priority, channel_packet_priority, cf_item_to_pair(ci)) < 0) return -1;
+
+	*((uint32_t *)out) = (uint32_t)priority;
+
+	return 0;
+}
 
 /** Wrapper around dl_instance which translates the packet-type into a submodule name
  *
@@ -226,6 +228,13 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 		RDEBUG("proto_vmps decode packet");
 		fr_vmps_print_hex(fr_log_fp, data, data_len);
 	}
+
+	/*
+	 *	Set the request dictionary so that we can do
+	 *	generic->protocol attribute conversions as
+	 *	the request runs through the server.
+	 */
+	request->dict = dict_vqp;
 
 	client = address->radclient;
 
@@ -385,9 +394,9 @@ static void mod_entry_point_set(void const *instance, REQUEST *request)
 	 *	'track' can be NULL when there's no network listener.
 	 */
 	if (inst->io.app_io && (track->dynamic == request->async->recv_time)) {
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 
-		app_process = (fr_app_process_t const *) inst->dynamic_submodule->module->common;
+		app_process = (fr_app_worker_t const *) inst->dynamic_submodule->module->common;
 
 		request->async->process = app_process->entry_point;
 		track->dynamic = 0;
@@ -589,10 +598,10 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 */
 	i = 0;
 	while ((cp = cf_pair_find_next(conf, cp, "type"))) {
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 		fr_dict_enum_t const	*enumv;
 
-		app_process = (fr_app_process_t const *)inst->type_submodule[i]->module->common;
+		app_process = (fr_app_worker_t const *)inst->type_submodule[i]->module->common;
 		if (app_process->instantiate && (app_process->instantiate(inst->type_submodule[i]->data,
 									  inst->type_submodule[i]->conf) < 0)) {
 			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
@@ -652,9 +661,9 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 *	Instantiate proto_vmps_dynamic_client
 	 */
 	{
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 
-		app_process = (fr_app_process_t const *)inst->dynamic_submodule->module->common;
+		app_process = (fr_app_worker_t const *)inst->dynamic_submodule->module->common;
 		if (app_process->instantiate && (app_process->instantiate(inst->dynamic_submodule->data, conf) < 0)) {
 			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
 			return -1;
@@ -680,7 +689,6 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	proto_vmps_t 		*inst = talloc_get_type_abort(instance, proto_vmps_t);
 	size_t			i = 0;
 	CONF_PAIR		*cp = NULL;
-	CONF_SECTION		*subcs;
 
 	/*
 	 *	Ensure that the server CONF_SECTION is always set.
@@ -696,7 +704,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	while ((cp = cf_pair_find_next(conf, cp, "type"))) {
 		char const		*value;
 		dl_t const		*module = talloc_get_type_abort_const(inst->type_submodule[i]->module, dl_t);
-		fr_app_process_t const	*app_process = (fr_app_process_t const *)module->common;
+		fr_app_worker_t const	*app_process = (fr_app_worker_t const *)module->common;
 
 		if (app_process->bootstrap && (app_process->bootstrap(inst->type_submodule[i]->data,
 								      inst->type_submodule[i]->conf) < 0)) {
@@ -742,19 +750,6 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	FR_TIMEVAL_BOUND_CHECK("nak_lifetime", &inst->io.nak_lifetime, <=, 600, 0);
 
 	/*
-	 *	Hide this for now.  It's only for people who know what
-	 *	they're doing.
-	 */
-	subcs = cf_section_find(conf, "priority", NULL);
-	if (subcs) {
-		if (cf_section_rules_push(subcs, priority_config) < 0) return -1;
-		if (cf_section_parse(NULL, NULL, subcs) < 0) return -1;
-	} else {
-		rad_assert(sizeof(inst->priorities) == sizeof(priorities));
-		memcpy(&inst->priorities, &priorities, sizeof(priorities));
-	}
-
-	/*
 	 *	Tell the master handler about the main protocol instance.
 	 */
 	inst->io.app = &proto_vmps;
@@ -796,17 +791,31 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	return 0;
 }
 
-fr_app_t proto_vmps = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "vmps",
-	.config		= proto_vmps_config,
-	.inst_size	= sizeof(proto_vmps_t),
+static int mod_load(void)
+{
+	if (fr_vqp_init() < 0) return -1;
 
-	.bootstrap	= mod_bootstrap,
-	.instantiate	= mod_instantiate,
-	.open		= mod_open,
-	.decode		= mod_decode,
-	.encode		= mod_encode,
+	return 0;
+}
+
+static void mod_unload(void)
+{
+	fr_vqp_free();
+}
+
+fr_app_t proto_vmps = {
+	.magic			= RLM_MODULE_INIT,
+	.name			= "vmps",
+	.config			= proto_vmps_config,
+	.inst_size		= sizeof(proto_vmps_t),
+
+	.load			= mod_load,
+	.unload			= mod_unload,
+	.bootstrap		= mod_bootstrap,
+	.instantiate		= mod_instantiate,
+	.open			= mod_open,
+	.decode			= mod_decode,
+	.encode			= mod_encode,
 	.entry_point_set	= mod_entry_point_set,
-	.priority	= mod_priority_set
+	.priority		= mod_priority_set
 };

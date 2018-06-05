@@ -54,14 +54,6 @@ static CONF_PARSER const limit_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static const FR_NAME_NUMBER priorities[] = {
-	{ "now",	PRIORITY_NOW },
-	{ "high",	PRIORITY_HIGH },
-	{ "normal",	PRIORITY_NORMAL },
-	{ "low",	PRIORITY_LOW },
-	{ NULL,		-1 }
-};
-
 static const CONF_PARSER priority_config[] = {
 	{ FR_CONF_OFFSET("Access-Request", FR_TYPE_UINT32, proto_radius_t, priorities[FR_CODE_ACCESS_REQUEST]),
 	  .func = priority_parse, .dflt = "high" },
@@ -122,7 +114,7 @@ static int priority_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUS
 {
 	int32_t priority;
 
-	if (cf_pair_in_table(&priority, priorities, cf_item_to_pair(ci)) < 0) return -1;
+	if (cf_pair_in_table(&priority, channel_packet_priority, cf_item_to_pair(ci)) < 0) return -1;
 
 	*((uint32_t *)out) = (uint32_t)priority;
 
@@ -181,7 +173,7 @@ static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PAR
 			}
 		}
 
-		if (!name || !type_enum) {
+		if (!type_enum) {
 			cf_log_err(ci, "Invalid type \"%s\"", type_str);
 			return -1;
 		}
@@ -232,21 +224,20 @@ static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PAR
 		inst->code_allowed[FR_CODE_DISCONNECT_REQUEST] = true;
 	}
 
-	process_app_cs = cf_section_find(listen_cs, name, NULL);
+	process_app_cs = cf_section_find(listen_cs, type_enum->alias, NULL);
 
 	/*
 	 *	Allocate an empty section if one doesn't exist
 	 *	this is so defaults get parsed.
 	 */
 	if (!process_app_cs) {
-		process_app_cs = cf_section_alloc(listen_cs, listen_cs, name, NULL);
-		cf_section_add(listen_cs, process_app_cs);
+		MEM(process_app_cs = cf_section_alloc(listen_cs, listen_cs, type_enum->alias, NULL));
 	}
 
 	/*
 	 *	Parent dl_instance_t added in virtual_servers.c (listen_parse)
 	 */
-	return dl_instance(ctx, out, cf_section_find(listen_cs, name, NULL), parent_inst, name, DL_TYPE_SUBMODULE);
+	return dl_instance(ctx, out, process_app_cs, parent_inst, name, DL_TYPE_SUBMODULE);
 }
 
 /** Wrapper around dl_instance
@@ -308,6 +299,13 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 		fr_radius_print_hex(fr_log_fp, data, data_len);
 	}
 
+	/*
+	 *	Set the request dictionary so that we can do
+	 *	generic->protocol attribute conversions as
+	 *	the request runs through the server.
+	 */
+	request->dict = dict_radius;
+
 	client = address->radclient;
 
 	/*
@@ -359,14 +357,14 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 	 *	values.
 	 */
 	if (!client->active) {
-		vp_cursor_t cursor;
+		fr_cursor_t cursor;
 		VALUE_PAIR *vp;
 
 		rad_assert(client->dynamic);
 
-		for (vp = fr_pair_cursor_init(&cursor, &request->packet->vps);
+		for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 		     vp != NULL;
-		     vp = fr_pair_cursor_next(&cursor)) {
+		     vp = fr_cursor_next(&cursor)) {
 			if (vp->da->flags.encrypt != FLAG_ENCRYPT_NONE) {
 				switch (vp->da->type) {
 				default:
@@ -515,9 +513,9 @@ static void mod_entry_point_set(void const *instance, REQUEST *request)
 	 *	'track' can be NULL when there's no network listener.
 	 */
 	if (inst->io.app_io && (track->dynamic == request->async->recv_time)) {
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 
-		app_process = (fr_app_process_t const *) inst->dynamic_submodule->module->common;
+		app_process = (fr_app_worker_t const *) inst->dynamic_submodule->module->common;
 
 		request->async->process = app_process->entry_point;
 		request->async->process_inst = inst->dynamic_submodule;
@@ -531,7 +529,7 @@ static void mod_entry_point_set(void const *instance, REQUEST *request)
 		return;
 	}
 
-	request->async->process = ((fr_app_process_t const *)type_submodule->module->common)->entry_point;
+	request->async->process = ((fr_app_worker_t const *)type_submodule->module->common)->entry_point;
 	request->async->process_inst = type_submodule->data;
 }
 
@@ -669,19 +667,9 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	proto_radius_t		*inst = talloc_get_type_abort(instance, proto_radius_t);
 	size_t			i;
 
-	fr_dict_attr_t const	*da;
 	CONF_PAIR		*cp = NULL;
 	CONF_ITEM		*ci = NULL;
 	CONF_SECTION		*server = cf_item_to_section(cf_parent(conf));
-
-	/*
-	 *	Needed to populate the code array
-	 */
-	da = fr_dict_attr_by_name(NULL, "Packet-Type");
-	if (!da) {
-		ERROR("Missing definition for Packet-Type");
-		return -1;
-	}
 
 	/*
 	 *	Compile each "send/recv + RADIUS packet type" section.
@@ -721,7 +709,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 		 *	Check that the packet type is known.
 		 */
 		packet_type = cf_section_name2(subcs);
-		dv = fr_dict_enum_by_alias(da, packet_type, -1);
+		dv = fr_dict_enum_by_alias(attr_packet_type, packet_type, -1);
 		if (!dv || (dv->value->vb_uint32 > FR_CODE_DO_NOT_RESPOND) ||
 		    !code2component[dv->value->vb_uint32]) {
 			cf_log_err(subcs, "Invalid RADIUS packet type in '%s %s {...}'", name, packet_type);
@@ -765,11 +753,11 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 */
 	i = 0;
 	while ((cp = cf_pair_find_next(conf, cp, "type"))) {
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 		fr_dict_enum_t const	*enumv;
 		int			code;
 
-		app_process = (fr_app_process_t const *)inst->type_submodule[i]->module->common;
+		app_process = (fr_app_worker_t const *)inst->type_submodule[i]->module->common;
 		if (app_process->instantiate &&
 		    (app_process->instantiate(inst->type_submodule[i]->data, inst->type_submodule[i]->conf) < 0)) {
 			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
@@ -827,9 +815,9 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 *	Instantiate proto_radius_dynamic_client
 	 */
 	{
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 
-		app_process = (fr_app_process_t const *)inst->dynamic_submodule->module->common;
+		app_process = (fr_app_worker_t const *)inst->dynamic_submodule->module->common;
 		if (app_process->instantiate && (app_process->instantiate(inst->dynamic_submodule->data, conf) < 0)) {
 			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
 			return -1;
@@ -867,7 +855,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	while ((cp = cf_pair_find_next(conf, cp, "type"))) {
 		char const		*value;
 		dl_t const		*module = talloc_get_type_abort_const(inst->type_submodule[i]->module, dl_t);
-		fr_app_process_t const	*app_process = (fr_app_process_t const *)module->common;
+		fr_app_worker_t const	*app_process = (fr_app_worker_t const *)module->common;
 
 		if (app_process->bootstrap && (app_process->bootstrap(inst->type_submodule[i]->data,
 								      inst->type_submodule[i]->conf) < 0)) {
@@ -958,8 +946,21 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	 *	Don't bootstrap the dynamic submodule.  We're
 	 *	not even sure what that means...
 	 */
-
 	return 0;
+}
+
+static int mod_load(void)
+{
+	if (fr_radius_init() < 0) {
+		PERROR("Failed initialising protocol library");
+		return -1;
+	}
+	return 0;
+}
+
+static void mod_unload(void)
+{
+	fr_radius_free();
 }
 
 fr_app_t proto_radius = {
@@ -968,6 +969,8 @@ fr_app_t proto_radius = {
 	.config			= proto_radius_config,
 	.inst_size		= sizeof(proto_radius_t),
 
+	.load			= mod_load,
+	.unload			= mod_unload,
 	.bootstrap		= mod_bootstrap,
 	.instantiate		= mod_instantiate,
 	.open			= mod_open,

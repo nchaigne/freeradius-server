@@ -80,15 +80,31 @@ fr_dict_autoload_t proto_detail_dict[] = {
 	{ NULL }
 };
 
-static fr_dict_attr_t const *attr_packet_type;
+static fr_dict_attr_t const *attr_packet_dst_ip_address;
+static fr_dict_attr_t const *attr_packet_dst_ipv6_address;
+static fr_dict_attr_t const *attr_packet_dst_port;
 static fr_dict_attr_t const *attr_packet_original_timestamp;
+static fr_dict_attr_t const *attr_packet_src_ip_address;
+static fr_dict_attr_t const *attr_packet_src_ipv6_address;
+static fr_dict_attr_t const *attr_packet_src_port;
+static fr_dict_attr_t const *attr_packet_type;
+static fr_dict_attr_t const *attr_protocol;
+
 static fr_dict_attr_t const *attr_event_timestamp;
 static fr_dict_attr_t const *attr_acct_delay_time;
 
 extern fr_dict_attr_autoload_t proto_detail_dict_attr[];
 fr_dict_attr_autoload_t proto_detail_dict_attr[] = {
-	{ .out = &attr_packet_type, .name = "Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
+	{ .out = &attr_packet_dst_ip_address, .name = "Packet-Dst-IP-Address", .type = FR_TYPE_IPV4_ADDR, .dict = &dict_freeradius },
+	{ .out = &attr_packet_dst_ipv6_address, .name = "Packet-Dst-IPv6-Address", .type = FR_TYPE_IPV6_ADDR, .dict = &dict_freeradius },
+	{ .out = &attr_packet_dst_port, .name = "Packet-Dst-Port", .type = FR_TYPE_UINT16, .dict = &dict_freeradius },
 	{ .out = &attr_packet_original_timestamp, .name = "Packet-Original-Timestamp", .type = FR_TYPE_DATE, .dict = &dict_freeradius },
+	{ .out = &attr_packet_src_ip_address, .name = "Packet-Src-IP-Address", .type = FR_TYPE_IPV4_ADDR, .dict = &dict_freeradius },
+	{ .out = &attr_packet_src_ipv6_address, .name = "Packet-Src-IPv6-Address", .type = FR_TYPE_IPV6_ADDR, .dict = &dict_freeradius },
+	{ .out = &attr_packet_src_port, .name = "Packet-Src-Port", .type = FR_TYPE_UINT16, .dict = &dict_freeradius },
+	{ .out = &attr_packet_type, .name = "Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
+	{ .out = &attr_protocol, .name = "Protocol", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
+
 	{ .out = &attr_event_timestamp, .name = "Event-Timestamp", .type = FR_TYPE_DATE, .dict = &dict_radius },
 	{ .out = &attr_acct_delay_time, .name = "Acct-Delay-Time", .type = FR_TYPE_UINT32, .dict = &dict_radius },
 	{ NULL }
@@ -211,13 +227,10 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 	int			num, lineno;
 	uint8_t const		*p, *end;
 	VALUE_PAIR		*vp;
-	vp_cursor_t		cursor;
+	fr_cursor_t		cursor;
 	time_t			timestamp = 0;
 
-	if (DEBUG_ENABLED3) {
-		RDEBUG("proto_detail decode packet");
-//		fr_radius_print_hex(fr_log_fp, data, data_len);
-	}
+	RHEXDUMP(L_DBG_LVL_3, data, data_len, "proto_detail decode packet");
 
 	request->packet->code = inst->code;
 
@@ -237,7 +250,7 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 	MPRINT("HEADER %s", data);
 
 	if (sscanf((char const *) data, "%*s %*s %*d %*d:%*d:%*d %d", &num) != 1) {
-		RDEBUG("Malformed header '%s'", (char const *) data);
+		REDEBUG("Malformed header '%s'", (char const *) data);
 		return -1;
 	}
 
@@ -249,7 +262,8 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 	}
 
 	lineno = 1;
-	fr_pair_cursor_init(&cursor, &request->packet->vps);
+	fr_cursor_init(&cursor, &request->packet->vps);
+	fr_cursor_tail(&cursor);	/* Ensure we only free what we add on error */
 
 	/*
 	 *	Parse each individual line.
@@ -268,7 +282,9 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 		 *	doesn't hurt to re-check it here.
 		 */
 		if ((*p != '\0') && (*p != '\t')) {
-			RDEBUG("Malformed line %d", lineno);
+			REDEBUG("Malformed line %d", lineno);
+		error:
+			fr_cursor_free_list(&cursor);
 			return -1;
 		}
 
@@ -295,7 +311,7 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 			if (vp) {
 				vp->vp_date = (uint32_t) timestamp;
 				vp->type = VT_DATA;
-				fr_pair_cursor_append(&cursor, vp);
+				fr_cursor_append(&cursor, vp);
 			}
 			goto next;
 		}
@@ -315,7 +331,7 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 		 */
 		vp = NULL;
 		if ((fr_pair_list_afrom_str(request->packet, (char const *) p, &vp) > 0) && vp) {
-			fr_pair_cursor_append(&cursor, vp);
+			fr_cursor_append(&cursor, vp);
 		} else {
 			RWDEBUG("Ignoring line %d - :%s", lineno, p);
 		}
@@ -323,27 +339,24 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 		/*
 		 *	Set the original src/dst ip/port
 		 */
-		if (vp && fr_dict_attr_is_top_level(vp->da)) switch (vp->da->attr) {
-			default:
-				break;
-
-			case FR_PACKET_SRC_IP_ADDRESS:
-			case FR_PACKET_SRC_IPV6_ADDRESS:
+		if (vp) {
+			if ((vp->da == attr_packet_src_ip_address) ||
+			    (vp->da == attr_packet_src_ipv6_address)) {
 				request->packet->src_ipaddr = vp->vp_ip;
-				break;
-
-			case FR_PACKET_DST_IP_ADDRESS:
-			case FR_PACKET_DST_IPV6_ADDRESS:
+			} else if ((vp->da == attr_packet_dst_ip_address) ||
+				   (vp->da == attr_packet_dst_ipv6_address)) {
 				request->packet->dst_ipaddr = vp->vp_ip;
-				break;
-
-			case FR_PACKET_SRC_PORT:
+			} else if (vp->da == attr_packet_src_port) {
 				request->packet->src_port = vp->vp_uint16;
-				break;
-
-			case FR_PACKET_DST_PORT:
+			} else if (vp->da == attr_packet_dst_port) {
 				request->packet->dst_port = vp->vp_uint16;
-				break;
+			} else if (vp->da == attr_protocol) {
+				request->dict = fr_dict_by_protocol_num(vp->vp_uint32);
+				if (!request->dict) {
+					REDEBUG("Invalid protocol: %pP", vp);
+					goto error;
+				}
+			}
 		}
 
 	next:
@@ -389,12 +402,12 @@ static ssize_t mod_encode(UNUSED void const *instance, REQUEST *request, uint8_t
 static void mod_entry_point_set(void const *instance, REQUEST *request)
 {
 	proto_detail_t const *inst = talloc_get_type_abort_const(instance, proto_detail_t);
-	fr_app_process_t const *app_process;
+	fr_app_worker_t const *app_process;
 
 	/*
 	 *	Only one "process" function: proto_detail_process.
 	 */
-	app_process = (fr_app_process_t const *)inst->type_submodule->module->common;
+	app_process = (fr_app_worker_t const *)inst->type_submodule->module->common;
 
 	request->server_cs = inst->server_cs;
 	request->async->process = app_process->entry_point;
@@ -522,9 +535,9 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 *	Instantiate the process module.
 	 */
 	while ((cp = cf_pair_find_next(conf, cp, "type"))) {
-		fr_app_process_t const *app_process;
+		fr_app_worker_t const *app_process;
 
-		app_process = (fr_app_process_t const *)inst->type_submodule->module->common;
+		app_process = (fr_app_worker_t const *)inst->type_submodule->module->common;
 		if (app_process->instantiate && (app_process->instantiate(inst->type_submodule->data,
 									  inst->type_submodule->conf) < 0)) {
 			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
@@ -588,7 +601,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	 */
 	while ((cp = cf_pair_find_next(conf, cp, "type"))) {
 		dl_t const		*module = talloc_get_type_abort_const(inst->type_submodule->module, dl_t);
-		fr_app_process_t const	*app_process = (fr_app_process_t const *)module->common;
+		fr_app_worker_t const	*app_process = (fr_app_worker_t const *)module->common;
 
 		if (app_process->bootstrap && (app_process->bootstrap(inst->type_submodule->data,
 								      inst->type_submodule->conf) < 0)) {

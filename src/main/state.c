@@ -118,9 +118,9 @@ struct fr_state_tree_t {
 	fr_state_entry_t	*head, *tail;			//!< Entries to expire.
 	uint32_t		timeout;			//!< How long to wait before cleaning up state entires.
 	pthread_mutex_t		mutex;				//!< Synchronisation mutex.
-};
 
-fr_state_tree_t *global_state = NULL;
+	fr_dict_attr_t const	*da;				//!< State attribute used.
+};
 
 #define PTHREAD_MUTEX_LOCK if (main_config.spawn_workers) pthread_mutex_lock
 #define PTHREAD_MUTEX_UNLOCK if (main_config.spawn_workers) pthread_mutex_unlock
@@ -166,19 +166,21 @@ static int _state_tree_free(fr_state_tree_t *state)
 	 */
 	talloc_free(state->tree);
 
-	if (state == global_state) global_state = NULL;
-
 	return 0;
 }
 
 /** Initialise a new state tree
  *
- * @param ctx to link the lifecycle of the state tree to.
- * @param max_sessions we track state for.
- * @param timeout How long to wait before cleaning up entries.
- * @return a new state tree or NULL on failure.
+ * @param[in] ctx		to link the lifecycle of the state tree to.
+ * @param[in] da		Attribute used to store and retrieve state from.
+ * @param[in] max_sessions	we track state for.
+ * @param[in] timeout		How long to wait before cleaning up entries.
+ * @return
+ *	- A new state tree.
+ *	- NULL on failure.
  */
-fr_state_tree_t *fr_state_tree_init(TALLOC_CTX *ctx, uint32_t max_sessions, uint32_t timeout)
+fr_state_tree_t *fr_state_tree_init(TALLOC_CTX *ctx, fr_dict_attr_t const *da,
+				    uint32_t max_sessions, uint32_t timeout)
 {
 	fr_state_tree_t *state;
 
@@ -214,6 +216,8 @@ fr_state_tree_t *fr_state_tree_init(TALLOC_CTX *ctx, uint32_t max_sessions, uint
 		return NULL;
 	}
 	talloc_set_destructor(state, _state_tree_free);
+
+	state->da = da;		/* Remember which attribute we use to load/store state */
 
 	return state;
 }
@@ -257,7 +261,7 @@ static void state_entry_unlink(fr_state_tree_t *state, fr_state_entry_t *entry)
 static int _state_entry_free(fr_state_entry_t *entry)
 {
 #ifdef WITH_VERIFY_PTR
-	vp_cursor_t cursor;
+	fr_cursor_t cursor;
 	VALUE_PAIR *vp;
 
 	/*
@@ -265,9 +269,9 @@ static int _state_entry_free(fr_state_entry_t *entry)
 	 *	by the state context.
 	 */
 	if (entry->ctx) {
-		for (vp = fr_pair_cursor_init(&cursor, &entry->vps);
+		for (vp = fr_cursor_init(&cursor, &entry->vps);
 		     vp;
-		     vp = fr_pair_cursor_next(&cursor)) {
+		     vp = fr_cursor_next(&cursor)) {
 			rad_assert(entry->ctx == talloc_parent(vp));
 		}
 	}
@@ -401,7 +405,7 @@ static fr_state_entry_t *state_entry_create(fr_state_tree_t *state, REQUEST *req
 	 *	int the reply, we use that in preference to the
 	 *	old state.
 	 */
-	vp = fr_pair_find_by_num(packet->vps, 0, FR_STATE, TAG_ANY);
+	vp = fr_pair_find_by_da(packet->vps, state->da, TAG_ANY);
 	if (vp) {
 		if (DEBUG_ENABLED && (vp->vp_length > sizeof(entry->state))) {
 			WARN("State too long, will be truncated.  Expected <= %zd bytes, got %zu bytes",
@@ -443,7 +447,7 @@ static fr_state_entry_t *state_entry_create(fr_state_tree_t *state, REQUEST *req
 		 */
 		entry->state_comp.server_id = main_config.state_server_id;
 
-		vp = fr_pair_afrom_num(packet, 0, FR_STATE);
+		vp = fr_pair_afrom_da(packet, state->da);
 		fr_pair_value_memcpy(vp, entry->state, sizeof(entry->state));
 		fr_pair_add(&packet->vps, vp);
 	}
@@ -462,7 +466,7 @@ static fr_state_entry_t *state_entry_create(fr_state_tree_t *state, REQUEST *req
 		RERROR("Failed inserting state entry (post alloc) - At maximum ongoing session limit (%u)",
 		       state->max_sessions);
 	failed:
-		fr_pair_delete_by_num(&packet->vps, 0, FR_STATE, TAG_ANY);
+		fr_pair_delete_by_da(&packet->vps, state->da);
 		talloc_free(entry);
 		return NULL;
 	}
@@ -508,7 +512,7 @@ static fr_state_entry_t *state_entry_find(fr_state_tree_t *state, REQUEST *reque
 	VALUE_PAIR *vp;
 	fr_state_entry_t *entry, my_entry;
 
-	vp = fr_pair_find_by_num(packet->vps, 0, FR_STATE, TAG_ANY);
+	vp = fr_pair_find_by_da(packet->vps, state->da, TAG_ANY);
 	if (!vp) return NULL;
 
 	if (vp->vp_length != sizeof(my_entry.state)) return NULL;
@@ -530,12 +534,12 @@ static fr_state_entry_t *state_entry_find(fr_state_tree_t *state, REQUEST *reque
 /** Called when sending an Access-Accept/Access-Reject to discard state information
  *
  */
-void fr_state_discard(fr_state_tree_t *state, REQUEST *request, RADIUS_PACKET *original)
+void fr_state_discard(fr_state_tree_t *state, REQUEST *request)
 {
 	fr_state_entry_t *entry;
 
 	PTHREAD_MUTEX_LOCK(&state->mutex);
-	entry = state_entry_find(state, request, original);
+	entry = state_entry_find(state, request, request->packet);
 	if (!entry) {
 		PTHREAD_MUTEX_UNLOCK(&state->mutex);
 		return;
@@ -568,7 +572,7 @@ void fr_state_discard(fr_state_tree_t *state, REQUEST *request, RADIUS_PACKET *o
  *
  * @note Called with the mutex free.
  */
-void fr_state_to_request(fr_state_tree_t *state, REQUEST *request, RADIUS_PACKET *packet)
+void fr_state_to_request(fr_state_tree_t *state, REQUEST *request)
 {
 	fr_state_entry_t *entry;
 	TALLOC_CTX *old_ctx = NULL;
@@ -578,7 +582,7 @@ void fr_state_to_request(fr_state_tree_t *state, REQUEST *request, RADIUS_PACKET
 	/*
 	 *	No State, don't do anything.
 	 */
-	if (!fr_pair_find_by_num(request->packet->vps, 0, FR_STATE, TAG_ANY)) {
+	if (!fr_pair_find_by_da(request->packet->vps, state->da, TAG_ANY)) {
 		RDEBUG3("No &request:State attribute, can't restore &session-state");
 		if (request->seq_start == 0) request->seq_start = request->number;	/* Need check for fake requests */
 		return;
@@ -586,7 +590,7 @@ void fr_state_to_request(fr_state_tree_t *state, REQUEST *request, RADIUS_PACKET
 
 	PTHREAD_MUTEX_LOCK(&state->mutex);
 
-	entry = state_entry_find(state, request, packet);
+	entry = state_entry_find(state, request, request->packet);
 	if (entry) {
 		(void)talloc_get_type_abort(entry, fr_state_entry_t);
 		if (entry->thawed) {
@@ -634,7 +638,7 @@ void fr_state_to_request(fr_state_tree_t *state, REQUEST *request, RADIUS_PACKET
  *
  * Also creates a new state entry.
  */
-int fr_request_to_state(fr_state_tree_t *state, REQUEST *request, RADIUS_PACKET *original, RADIUS_PACKET *packet)
+int fr_request_to_state(fr_state_tree_t *state, REQUEST *request)
 {
 	fr_state_entry_t *entry, *old;
 	request_data_t *data;
@@ -650,9 +654,9 @@ int fr_request_to_state(fr_state_tree_t *state, REQUEST *request, RADIUS_PACKET 
 
 	PTHREAD_MUTEX_LOCK(&state->mutex);
 
-	old = original ? state_entry_find(state, request, original) : NULL;
+	old = request->packet ? state_entry_find(state, request, request->packet) : NULL;
 
-	entry = state_entry_create(state, request, packet, old);
+	entry = state_entry_create(state, request, request->reply, old);
 	if (!entry) {
 		PTHREAD_MUTEX_UNLOCK(&state->mutex);
 		RERROR("Creating state entry failed");

@@ -300,7 +300,11 @@ static void mod_vptuple(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vps, PyO
 			}
 		}
 
-		if (tmpl_afrom_attr_str(ctx, &dst, s1, REQUEST_CURRENT, PAIR_LIST_REPLY, false, false) <= 0) {
+		if (tmpl_afrom_attr_str(ctx, &dst, s1,
+					&(vp_tmpl_rules_t){
+						.dict_def = request->dict,
+						.list_def = PAIR_LIST_REPLY
+					}) <= 0) {
 			ERROR("%s - Failed to find attribute %s:%s", funcname, list_name, s1);
 			continue;
 		}
@@ -321,7 +325,7 @@ static void mod_vptuple(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vps, PyO
 
 
 		vp->op = op;
-		if (fr_pair_value_from_str(vp, s2, -1) < 0) {
+		if (fr_pair_value_from_str(vp, s2, -1, '\0', false) < 0) {
 			DEBUG("%s - Failed: '%s:%s' %s '%s'", funcname, list_name, s1,
 			      fr_int2str(fr_tokens_table, op, "="), s2);
 		} else {

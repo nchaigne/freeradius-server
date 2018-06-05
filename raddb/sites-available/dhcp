@@ -42,7 +42,7 @@ listen {
 	type = DHCP-Discover
 	type = DHCP-Decline
 
-	protocol = udp
+	transport = udp
 
 	udp {
 		#  IP address to listen on. Will usually be the IP of the
@@ -57,6 +57,20 @@ listen {
 
 		#  Interface name we are listening on. See comments above.
 #		interface = lo0
+
+		#  source IP address for unicast packets sent by the
+		#  DHCP server.
+		#
+		#  The source IP for unicast packets is chosen from the first
+		#  one of the following items which returns a valid IP
+		#  address:
+		#
+		#       src_ipaddr
+		#       ipaddr
+		#       reply:DHCP-Server-IP-Address
+		#       reply:DHCP-DHCP-Server-Identifier
+		#
+		src_ipaddr = 127.0.0.1
 
 		# The DHCP server defaults to allowing broadcast packets.
 		# Set this to "no" only when the server receives *all* packets

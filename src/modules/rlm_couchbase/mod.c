@@ -369,7 +369,7 @@ int mod_json_object_to_map(TALLOC_CTX *ctx, fr_cursor_t *out, REQUEST *request, 
 		 *	Lookup the string attr_name in the
 		 *	request dictionary.
 		 */
-		da = fr_dict_attr_by_name(NULL, attr_name);
+		da = fr_dict_attr_by_name(request->dict, attr_name);
 		if (!da) {
 			RPERROR("Invalid attribute \"%s\"", attr_name);
 			goto error;
@@ -393,8 +393,14 @@ int mod_json_object_to_map(TALLOC_CTX *ctx, fr_cursor_t *out, REQUEST *request, 
 				goto bad_value;
 			}
 
-			if (map_afrom_value_box(ctx, &map, attr_name, T_BARE_WORD,
-						op, &tmp, true, REQUEST_CURRENT, list) < 0) {
+			if (map_afrom_value_box(ctx, &map,
+						attr_name, T_BARE_WORD,
+						&(vp_tmpl_rules_t){
+							.dict_def = request->dict,
+							.list_def = list,
+						},
+						op,
+						&tmp, true) < 0) {
 				fr_value_box_clear(&tmp);
 				goto bad_value;
 			}
@@ -533,7 +539,7 @@ int mod_ensure_start_timestamp(json_object *json, VALUE_PAIR *vps)
 	}
 
 	/* get current event timestamp */
-	if ((vp = fr_pair_find_by_num(vps, 0, FR_EVENT_TIMESTAMP, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_da(vps, attr_event_timestamp, TAG_ANY)) != NULL) {
 		/* get seconds value from attribute */
 		ts = vp->vp_date;
 	} else {
@@ -547,7 +553,7 @@ int mod_ensure_start_timestamp(json_object *json, VALUE_PAIR *vps)
 	memset(value, 0, sizeof(value));
 
 	/* get elapsed session time */
-	if ((vp = fr_pair_find_by_num(vps, 0, FR_ACCT_SESSION_TIME, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_da(vps, attr_acct_session_time, TAG_ANY)) != NULL) {
 		/* calculate diff */
 		ts = (ts - vp->vp_uint32);
 		/* calculate start time */

@@ -126,12 +126,14 @@ fr_dict_autoload_t rlm_sql_dict[] = {
 };
 
 static fr_dict_attr_t const *attr_fall_through;
+static fr_dict_attr_t const *attr_sql_user_name;
 static fr_dict_attr_t const *attr_user_profile;
 static fr_dict_attr_t const *attr_user_name;
 
 extern fr_dict_attr_autoload_t rlm_sql_dict_attr[];
 fr_dict_attr_autoload_t rlm_sql_dict_attr[] = {
 	{ .out = &attr_fall_through, .name = "Fall-Through", .type = FR_TYPE_BOOL, .dict = &dict_freeradius },
+	{ .out = &attr_sql_user_name, .name = "SQL-User-Name", .type = FR_TYPE_STRING, .dict = &dict_freeradius },
 	{ .out = &attr_user_profile, .name = "User-Profile", .type = FR_TYPE_STRING, .dict = &dict_freeradius },
 	{ .out = &attr_user_name, .name = "User-Name", .type = FR_TYPE_STRING, .dict = &dict_radius },
 	{ NULL }
@@ -180,7 +182,7 @@ static ssize_t sql_xlat(UNUSED TALLOC_CTX *ctx, char **out, UNUSED size_t outlen
 	/*
 	 *	Trim whitespace for the prefix check
 	 */
-	for (p = fmt; is_whitespace(p); p++);
+	for (p = fmt; isspace(*p); p++);
 
 	/*
 	 *	If the query starts with any of the following prefixes,
@@ -264,7 +266,8 @@ finish:
  *	- 0 on success.
  *	- -1 on failure.
  */
-static int _sql_map_proc_get_value(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, vp_map_t const *map, void *uctx)
+static int _sql_map_proc_get_value(TALLOC_CTX *ctx, VALUE_PAIR **out,
+				   REQUEST *request, vp_map_t const *map, void *uctx)
 {
 	VALUE_PAIR	*vp;
 	char const	*value = uctx;
@@ -276,12 +279,10 @@ static int _sql_map_proc_get_value(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *r
 	 *	Buffer not always talloced, sometimes it's
 	 *	just a pointer to a field in a result struct.
 	 */
-	if (fr_pair_value_from_str(vp, value, strlen(value)) < 0) {
-		char *escaped;
-
-		escaped = fr_asprint(vp, value, talloc_array_length(value) - 1, '"');
-		RPEDEBUG("Failed parsing value \"%s\" for attribute %s", escaped, map->lhs->tmpl_da->name);
-		talloc_free(vp); /* also frees escaped */
+	if (fr_pair_value_from_str(vp, value, -1, '\0', true) < 0) {
+		RPEDEBUG("Failed parsing value \"%pV\" for attribute %s",
+			 fr_box_strvalue_buffer(value), map->lhs->tmpl_da->name);
+		talloc_free(vp);
 
 		return -1;
 	}
@@ -1057,9 +1058,8 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 			goto error;
 		}
 
-		inst->group_da = fr_dict_attr_by_name(fr_dict_internal, group_attribute);
-		if (!inst->group_da) {
-			ERROR("Failed resolving group attribute \"%s\"", group_attribute);
+		if (fr_dict_attr_by_qualified_name(&inst->group_da, dict_freeradius, group_attribute) < 0) {
+			PERROR("Failed resolving group attribute");
 			goto error;
 		}
 	}
@@ -1129,10 +1129,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 *	Cache the SQL-User-Name fr_dict_attr_t, so we can be slightly
 	 *	more efficient about creating SQL-User-Name attributes.
 	 */
-	inst->sql_user = fr_dict_attr_by_name(NULL, "SQL-User-Name");
-	if (!inst->sql_user) {
-		return -1;
-	}
+	inst->sql_user = attr_sql_user_name;
 
 	/*
 	 *	Export these methods, too.  This avoids RTDL_GLOBAL.

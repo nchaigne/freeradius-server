@@ -791,7 +791,7 @@ static int rest_decode_post(UNUSED rlm_rest_t const *instance, UNUSED rlm_rest_s
 			continue;
 		}
 
-		da = fr_dict_attr_by_name(NULL, attribute);
+		da = fr_dict_attr_by_name(request->dict, attribute);
 		if (!da) {
 			RWDEBUG("Attribute \"%s\" unknown, skipping", attribute);
 
@@ -838,7 +838,7 @@ static int rest_decode_post(UNUSED rlm_rest_t const *instance, UNUSED rlm_rest_s
 			goto error;
 		}
 
-		ret = fr_pair_value_from_str(vp, expanded, -1);
+		ret = fr_pair_value_from_str(vp, expanded, -1, '\0', true);
 		TALLOC_FREE(expanded);
 		if (ret < 0) {
 			RWDEBUG("Incompatible value assignment, skipping");
@@ -1068,7 +1068,11 @@ static int json_pair_alloc(rlm_rest_t const *instance, rlm_rest_section_t const 
 		 */
 		RDEBUG2("Parsing attribute \"%s\"", name);
 
-		if (tmpl_afrom_attr_str(request, &dst, name, REQUEST_CURRENT, PAIR_LIST_REPLY, false, false) <= 0) {
+		if (tmpl_afrom_attr_str(request, &dst, name,
+					&(vp_tmpl_rules_t){
+						.dict_def = request->dict,
+						.list_def = PAIR_LIST_REPLY
+					}) <= 0) {
 			RPWDEBUG("Failed parsing attribute (skipping)");
 			continue;
 		}
@@ -1769,8 +1773,7 @@ int rest_request_config(rlm_rest_t const *inst, rlm_rest_thread_t *t, rlm_rest_s
 	ctx->headers = curl_slist_append(ctx->headers, buffer);
 	if (!ctx->headers) goto error_header;
 
-	for (header = fr_cursor_talloc_iter_init(&headers, &request->control,
-						 fr_pair_iter_next_by_da, attr_rest_http_header, VALUE_PAIR);
+	for (header =  fr_cursor_iter_by_da_init(&headers, &request->control, attr_rest_http_header);
 	     header;
 	     header = fr_cursor_next(&headers)) {
 		header = fr_cursor_remove(&headers);
@@ -2121,7 +2124,7 @@ int rest_response_certinfo(rlm_rest_t const *inst, UNUSED rlm_rest_section_t con
 				continue;
 			}
 			MEM(vp = fr_pair_afrom_da(request->packet, da));
-			fr_pair_value_from_str(vp, q + 1, -1);
+			fr_pair_value_from_str(vp, q + 1, -1, '\0', true);
 
 			fr_cursor_append(&cursor, vp);
 		}

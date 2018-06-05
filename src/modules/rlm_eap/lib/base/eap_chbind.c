@@ -172,7 +172,7 @@ FR_CODE chbind_process(REQUEST *request, CHBIND_REQ *chbind)
 	/* Set-up the fake request */
 	fake = request_alloc_fake(request);
 	MEM(fr_pair_add_by_da(fake->packet, &vp, &fake->packet->vps, attr_freeradius_proxied_to) >= 0);
-	fr_pair_value_from_str(vp, "127.0.0.1", sizeof("127.0.0.1"));
+	fr_pair_value_from_str(vp, "127.0.0.1", sizeof("127.0.0.1"), '\0', false);
 
 	/* Add the username to the fake request */
 	if (chbind->username) {
@@ -254,20 +254,19 @@ chbind_packet_t *eap_chbind_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 {
 	size_t			length;
 	uint8_t 		*ptr;
-	VALUE_PAIR		*first, *vp;
+	VALUE_PAIR		*vp;
 	chbind_packet_t		*packet;
-	vp_cursor_t		cursor;
+	fr_cursor_t		cursor;
 
-	first = fr_pair_find_by_da(vps, attr_eap_channel_binding_message, TAG_ANY);
-	if (!first) return NULL;
+	if (!fr_cursor_iter_by_da_init(&cursor, &vps, attr_eap_channel_binding_message)) return NULL;
 
 	/*
 	 *	Compute the total length of the channel binding data.
 	 */
 	length = 0;
-	for (vp = fr_pair_cursor_init(&cursor, &first);
-	     vp != NULL;
-	     vp = fr_pair_cursor_next_by_da(&cursor, attr_eap_channel_binding_message, TAG_ANY)) {
+	for (vp = fr_cursor_current(&cursor);
+	     vp;
+	     vp = fr_cursor_next(&cursor)) {
 		length += vp->vp_length;
 	}
 
@@ -286,9 +285,9 @@ chbind_packet_t *eap_chbind_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	 *	Copy the data over to our packet.
 	 */
 	packet = (chbind_packet_t *) ptr;
-	for (vp = fr_pair_cursor_init(&cursor, &first);
+	for (vp = fr_cursor_head(&cursor);
 	     vp != NULL;
-	     vp = fr_pair_cursor_next_by_da(&cursor, attr_eap_channel_binding_message, TAG_ANY)) {
+	     vp = fr_cursor_next(&cursor)) {
 		memcpy(ptr, vp->vp_octets, vp->vp_length);
 		ptr += vp->vp_length;
 	}

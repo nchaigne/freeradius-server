@@ -224,8 +224,8 @@ static ssize_t cond_tokenize_string(TALLOC_CTX *ctx, char **out, char const **er
 		}
 		*(q++) = *(p++);
 	}
-
 	*error = "Unterminated string";
+
 	return -1;
 }
 
@@ -317,7 +317,7 @@ static ssize_t cond_tokenize_cast(char const *start, fr_dict_attr_t const **pda,
 		return -(p - start);
 	}
 
-	*pda = fr_dict_attr_by_num(NULL, 0, FR_CAST_BASE + cast);
+	*pda = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_CAST_BASE + cast);
 	if (!*pda) {
 		*error = "Cannot cast to this data type";
 		return -(p - start);
@@ -439,12 +439,17 @@ static bool cond_type_check(fr_cond_t *c, fr_type_t lhs_type)
 static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, bool brace,
 			     fr_cond_t **pcond, char const **error, int flags)
 {
-	ssize_t slen, tlen;
-	char const *p = start;
-	char const *lhs_p, *rhs_p;
-	fr_cond_t *c;
-	char *lhs, *rhs;
-	FR_TOKEN op, lhs_type, rhs_type;
+	ssize_t			slen, tlen;
+	char const		*p = start;
+	char const		*lhs_p, *rhs_p;
+	fr_cond_t		*c;
+	char			*lhs, *rhs;
+	FR_TOKEN		op, lhs_type, rhs_type;
+
+	vp_tmpl_rules_t		parse_rules = {
+					.allow_unknown = true,
+					.allow_undefined = true
+				};
 
 	c = talloc_zero(ctx, fr_cond_t);
 
@@ -534,7 +539,7 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 				return_P("Empty octet string is invalid");
 			}
 
-			c->cast = fr_dict_attr_by_num(NULL, 0, FR_CAST_BASE + FR_TYPE_OCTETS);
+			c->cast = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_CAST_BASE + FR_TYPE_OCTETS);
 		}
 
 		while (isspace((int)*p)) p++; /* skip spaces after LHS */
@@ -577,8 +582,8 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 			c->type = COND_TYPE_EXISTS;
 			c->ci = ci;
 
-			tlen = tmpl_afrom_str(c, &c->data.vpt, lhs, talloc_array_length(lhs) - 1,
-					      lhs_type, REQUEST_CURRENT, PAIR_LIST_REQUEST, false);
+			tlen = tmpl_afrom_str(c, &c->data.vpt,
+					      lhs, talloc_array_length(lhs) - 1, lhs_type, &parse_rules, false);
 			if (tlen < 0) {
 				p = lhs_p - tlen;
 				return_P(fr_strerror());
@@ -772,7 +777,7 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 			c->data.map = map = talloc_zero(c, vp_map_t);
 
 			tlen = tmpl_afrom_str(map, &map->lhs, lhs, talloc_array_length(lhs) - 1,
-					      lhs_type, REQUEST_CURRENT, PAIR_LIST_REQUEST, false);
+					      lhs_type, &parse_rules, false);
 			if (tlen < 0) {
 				p = lhs_p - tlen;
 				return_P(fr_strerror());
@@ -807,7 +812,8 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 				      (map->lhs->tmpl_da->type == FR_TYPE_UINT16) ||
 				      (map->lhs->tmpl_da->type == FR_TYPE_UINT32) ||
 				      (map->lhs->tmpl_da->type == FR_TYPE_UINT64))) {
-					c->cast = fr_dict_attr_by_num(NULL, 0, FR_CAST_BASE + FR_TYPE_OCTETS);
+					c->cast = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal),
+									    FR_CAST_BASE + FR_TYPE_OCTETS);
 				}
 			}
 
@@ -818,7 +824,7 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 
 			} else {
 				tlen = tmpl_afrom_str(map, &map->rhs, rhs, talloc_array_length(rhs) - 1, rhs_type,
-						      REQUEST_CURRENT, PAIR_LIST_REQUEST, false);
+						      &parse_rules, false);
 				if (tlen < 0) {
 					p = rhs_p - tlen;
 					return_P(fr_strerror());
@@ -1074,14 +1080,14 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 					case FR_TYPE_IPV4_ADDR:
 						if (strchr(c->data.map->rhs->name, '/') != NULL) {
 							type = FR_TYPE_IPV4_PREFIX;
-							c->cast = fr_dict_attr_by_num(NULL, 0, FR_CAST_BASE + type);
+							c->cast = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_CAST_BASE + type);
 						}
 						break;
 
 					case FR_TYPE_IPV6_ADDR:
 						if (strchr(c->data.map->rhs->name, '/') != NULL) {
 							type = FR_TYPE_IPV6_PREFIX;
-							c->cast = fr_dict_attr_by_num(NULL, 0, FR_CAST_BASE + type);
+							c->cast = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_CAST_BASE + type);
 						}
 						break;
 
@@ -1151,13 +1157,13 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 				     (c->data.map->rhs->type == TMPL_TYPE_XLAT_STRUCT) ||
 				     (c->data.map->rhs->type == TMPL_TYPE_EXEC))) {
 					if (c->data.map->lhs->tmpl_da->type == FR_TYPE_IPV4_ADDR) {
-						c->cast = fr_dict_attr_by_num(NULL, 0,
-									      FR_CAST_BASE + FR_TYPE_IPV4_PREFIX);
+						c->cast = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal),
+										    FR_CAST_BASE + FR_TYPE_IPV4_PREFIX);
 					}
 
 					if (c->data.map->lhs->tmpl_da->type == FR_TYPE_IPV6_ADDR) {
-						c->cast = fr_dict_attr_by_num(NULL, 0,
-									      FR_CAST_BASE + FR_TYPE_IPV6_PREFIX);
+						c->cast = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal),
+										    FR_CAST_BASE + FR_TYPE_IPV6_PREFIX);
 					}
 				}
 
@@ -1182,7 +1188,7 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 					 *	e.g. LDAP-Group and SQL-Group.
 					 */
 					for (i = 0; i < c->data.map->lhs->len; i++) {
-						if (!fr_dict_attr_allowed_chars[(unsigned char) c->data.map->lhs->name[i]]) {
+						if (!fr_dict_attr_allowed_chars[(uint8_t) c->data.map->lhs->name[i]]) {
 							may_be_attr = false;
 							break;
 						}
@@ -1196,8 +1202,10 @@ static ssize_t cond_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *start, 
 
 					if (may_be_attr) {
 						attr_slen = tmpl_afrom_attr_str(c->data.map, &vpt, lhs,
-										REQUEST_CURRENT, PAIR_LIST_REQUEST,
-										true, true);
+										&(vp_tmpl_rules_t){
+											.allow_unknown = true,
+											.allow_undefined = true
+										});
 						if ((attr_slen > 0) && (vpt->len == c->data.map->lhs->len)) {
 							talloc_free(c->data.map->lhs);
 							c->data.map->lhs = vpt;

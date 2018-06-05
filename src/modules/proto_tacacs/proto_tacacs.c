@@ -30,6 +30,26 @@
 
 #include <freeradius-devel/tacacs/tacacs.h>
 
+typedef struct {
+	uint32_t	session_timeout;		//!< Maximum time between rounds.
+	uint32_t	max_sessions;			//!< Maximum ongoing sessions.
+
+	fr_state_tree_t	*state_tree;
+} proto_tacacs_t;
+
+static const CONF_PARSER sessions_config[] = {
+	{ FR_CONF_OFFSET("timeout", FR_TYPE_UINT32, proto_tacacs_t, session_timeout), .dflt = "15" },
+	{ FR_CONF_OFFSET("max", FR_TYPE_UINT32, proto_tacacs_t, max_sessions), .dflt = "4096" },
+
+	CONF_PARSER_TERMINATOR
+};
+
+static const CONF_PARSER proto_tacacs_config[] = {
+	{ FR_CONF_POINTER("sessions", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) sessions_config },
+
+	CONF_PARSER_TERMINATOR
+};
+
 static fr_dict_t *dict_freeradius;
 static fr_dict_t *dict_radius;
 static fr_dict_t *dict_tacacs;
@@ -102,19 +122,19 @@ static void tacacs_status(REQUEST * const request, rlm_rcode_t rcode)
 		switch (rcode) {
 		case RLM_MODULE_OK:
 			MEM(pair_update_reply(&vp, attr_tacacs_authentication_status) >= 0);
-			fr_pair_value_from_str(vp, "Pass", -1);
+			fr_pair_value_from_str(vp, "Pass", -1, '\0', false);
 			break;
 
 		case RLM_MODULE_FAIL:
 		case RLM_MODULE_REJECT:
 		case RLM_MODULE_USERLOCK:
 			MEM(pair_update_reply(&vp, attr_tacacs_authentication_status) >= 0);
-			fr_pair_value_from_str(vp, "Fail", -1);
+			fr_pair_value_from_str(vp, "Fail", -1, '\0', false);
 			break;
 
 		case RLM_MODULE_INVALID:
 			MEM(pair_update_reply(&vp, attr_tacacs_authentication_status) >= 0);
-			fr_pair_value_from_str(vp, "Error", -1);
+			fr_pair_value_from_str(vp, "Error", -1, '\0', false);
 			break;
 
 		case RLM_MODULE_HANDLED:	/* unlang set status */
@@ -131,19 +151,19 @@ noop:
 		switch (rcode) {
 		case RLM_MODULE_OK:
 			MEM(pair_update_reply(&vp, attr_tacacs_authorization_status) >= 0);
-			fr_pair_value_from_str(vp, "Pass-Repl", -1);
+			fr_pair_value_from_str(vp, "Pass-Repl", -1, '\0', false);
 			break;
 
 		case RLM_MODULE_FAIL:
 		case RLM_MODULE_REJECT:
 		case RLM_MODULE_USERLOCK:
 			MEM(pair_update_reply(&vp, attr_tacacs_authorization_status) >= 0);
-			fr_pair_value_from_str(vp, "Fail", -1);
+			fr_pair_value_from_str(vp, "Fail", -1, '\0', false);
 			break;
 
 		case RLM_MODULE_INVALID:
 			MEM(pair_update_reply(&vp, attr_tacacs_authorization_status) >= 0);
-			fr_pair_value_from_str(vp, "Error", -1);
+			fr_pair_value_from_str(vp, "Error", -1, '\0', false);
 			break;
 
 		default:
@@ -155,7 +175,7 @@ noop:
 		switch (rcode) {
 		case RLM_MODULE_OK:
 			MEM(pair_update_reply(&vp, attr_tacacs_accounting_status) >= 0);
-			fr_pair_value_from_str(vp, "Success", -1);
+			fr_pair_value_from_str(vp, "Success", -1, '\0', false);
 			break;
 
 		case RLM_MODULE_FAIL:
@@ -163,7 +183,7 @@ noop:
 		case RLM_MODULE_USERLOCK:
 		case RLM_MODULE_INVALID:
 			MEM(pair_update_reply(&vp, attr_tacacs_accounting_status) >= 0);
-			fr_pair_value_from_str(vp, "Error", -1);
+			fr_pair_value_from_str(vp, "Error", -1, '\0', false);
 			break;
 
 		default:
@@ -198,7 +218,7 @@ static void tacacs_running(REQUEST *request, fr_state_signal_t action)
 	CONF_SECTION		*unlang;
 	fr_dict_enum_t const	*dv = NULL;
 	VALUE_PAIR *vp,		*auth_type;
-	vp_cursor_t		cursor;
+	fr_cursor_t		cursor;
 	int			rc;
 
 	REQUEST_VERIFY(request);
@@ -236,7 +256,9 @@ static void tacacs_running(REQUEST *request, fr_state_signal_t action)
 		/* FIXME only for seq_id greater than 1 */
 		if (tacacs_type(request->packet) == TAC_PLUS_AUTHEN) {
 			state_add(request, request->packet);
-			fr_state_to_request(global_state, request, request->packet);
+#ifdef TACACS_HAS_BEEN_MIGRATED
+			fr_state_to_request(inst->state_tree, request);
+#endif
 		}
 
 		RDEBUG("Running 'recv %s' from file %s", cf_section_name2(unlang), cf_filename(unlang));
@@ -250,8 +272,10 @@ static void tacacs_running(REQUEST *request, fr_state_signal_t action)
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) {
 stop_processing:
+#ifdef TACACS_HAS_BEEN_MIGRATED
 			if (tacacs_type(request->packet) == TAC_PLUS_AUTHEN)
-				fr_state_discard(global_state, request, request->packet);
+				fr_state_discard(inst->state_tree, request);
+#endif
 			goto done;
 		}
 
@@ -281,9 +305,10 @@ stop_processing:
 		/*
 		 *	Find Auth-Type, and complain if they have too many.
 		 */
-		fr_pair_cursor_init(&cursor, &request->control);
 		auth_type = NULL;
-		while ((vp = fr_pair_cursor_next_by_da(&cursor, attr_auth_type, TAG_ANY)) != NULL) {
+		for (vp = fr_cursor_iter_by_da_init(&cursor, &request->control, attr_auth_type);
+		     vp;
+		     vp = fr_cursor_next(&cursor)) {
 			if (!auth_type) {
 				auth_type = vp;
 				continue;
@@ -412,7 +437,9 @@ send_reply:
 				case TAC_PLUS_AUTHEN_STATUS_RESTART:
 				case TAC_PLUS_AUTHEN_STATUS_ERROR:
 				case TAC_PLUS_AUTHEN_STATUS_FOLLOW:
-					fr_state_discard(global_state, request, request->packet);
+#ifdef TACACS_HAS_BEEN_MIGRATED
+					fr_state_discard(inst->state_tree, request);
+#endif
 					break;
 				default:
 					vp = fr_pair_find_by_da(request->packet->vps,
@@ -425,7 +452,9 @@ send_reply:
 					/* authentication would continue but seq_no cannot continue */
 					if (vp->vp_uint8 == 253) {
 						RWARN("Sequence number would wrap, restarting authentication");
-						fr_state_discard(global_state, request, request->packet);
+#ifdef TACACS_HAS_BEEN_MIGRATED
+						fr_state_discard(inst->state_tree, request);
+#endif
 						fr_pair_list_free(&request->reply->vps);
 
 						MEM(pair_update_reply(&vp, attr_tacacs_authentication_status) >= 0);
@@ -433,13 +462,18 @@ send_reply:
 					} else {
 						state_add(request, request->reply);
 						request->reply->code = 1;	/* FIXME: util.c:request_verify() */
-						fr_request_to_state(global_state, request,
-								    request->packet, request->reply);
+#ifdef TACACS_HAS_BEEN_MIGRATED
+						fr_request_to_state(inst->state_tree, request);
+#endif
 					}
 				}
-			} else {
-				fr_state_discard(global_state, request, request->packet);
+
 			}
+#ifdef TACACS_HAS_BEEN_MIGRATED
+			else {
+				fr_state_discard(inst->state_tree, request);
+			}
+#endif
 		}
 
 		if (RDEBUG_ENABLED) tacacs_packet_debug(request, request->reply, false);
@@ -638,7 +672,9 @@ rad_protocol_t proto_tacacs = {
 	.magic		= RLM_MODULE_INIT,
 	.load		= mod_load,
 	.unload		= mod_unload,
-	.inst_size	= sizeof(listen_socket_t),
+	.config		= proto_tacacs_config,
+	.inst_size	= sizeof(proto_tacacs_t),
+
 	.transports	= TRANSPORT_TCP,
 	.tls		= false,
 	.compile	= tacacs_listen_compile,

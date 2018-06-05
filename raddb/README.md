@@ -44,6 +44,12 @@ last in any `send Access-Reject section.
 
 `status_server` - see `type = Status-Server` in a new `listen` section.
 
+The `log` section has been updated to remove many configuration items
+which are specific to RADIUS, and to Access-Request packets.  Please
+see `sites-available/default`, and look for the `Access-Request`
+subsection there.  See also `templates.conf` for a way to regain one
+global configuration for Access-Request packets.
+
 ## Virtual Servers
 
 There are some changes to the virtual servers in v4.  First, every
@@ -55,7 +61,7 @@ For RADIUS, use:
 
     namespace = radius
 
-This tells the daemon what protocol is being used in that virtual
+This tells the server what protocol is being used in that virtual
 server.  This configuration was not necessary in v3, because each
 protocol was implemented (mostly) in the RADIUS state machine.  In v4,
 each protocol is completely independent, and RADIUS is no longer

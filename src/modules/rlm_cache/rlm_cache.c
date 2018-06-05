@@ -220,13 +220,7 @@ static rlm_rcode_t cache_find(rlm_cache_entry_t **out, rlm_cache_t const *inst, 
 			break;
 
 		case CACHE_MISS:
-			if (RDEBUG_ENABLED2) {
-				char *p;
-
-				p = fr_asprint(request, (char const *)key, key_len, '"');
-				RDEBUG("No cache entry found for \"%s\"", p);
-				talloc_free(p);
-			}
+			RDEBUG2("No cache entry found for \"%pV\"", fr_box_strvalue_len((char const *)key, key_len));
 			return RLM_MODULE_NOTFOUND;
 
 		/* FALL-THROUGH */
@@ -243,27 +237,16 @@ static rlm_rcode_t cache_find(rlm_cache_entry_t **out, rlm_cache_t const *inst, 
 	 *	passed.  Delete it, and pretend it doesn't exist.
 	 */
 	if ((c->expires < request->packet->timestamp.tv_sec) || (c->created < inst->config.epoch)) {
-		if (RDEBUG_ENABLED2) {
-			char *p;
-
-			p = fr_asprint(request, (char const *)key, key_len, '"');
-			RDEBUG2("Found entry for \"%s\", but it expired %li seconds ago.  Removing it", p,
-				request->packet->timestamp.tv_sec - c->expires);
-			talloc_free(p);
-		}
+		RDEBUG2("Found entry for \"%pV\", but it expired %li seconds ago.  Removing it",
+			fr_box_strvalue_len((char const *)key, key_len),
+			request->packet->timestamp.tv_sec - c->expires);
 
 		inst->driver->expire(&inst->config, inst->driver_inst->data, request, handle, c->key, c->key_len);
 		cache_free(inst, &c);
 		return RLM_MODULE_NOTFOUND;	/* Couldn't find a non-expired entry */
 	}
 
-	if (RDEBUG_ENABLED2) {
-		char *p;
-
-		p = fr_asprint(request, (char const *)key, key_len, '"');
-		RDEBUG2("Found entry for \"%s\"", p);
-		talloc_free(p);
-	}
+	RDEBUG2("Found entry for \"%pV\"", fr_box_strvalue_len((char const *)key, key_len));
 
 	c->hits++;
 	*out = c;
@@ -840,7 +823,7 @@ static ssize_t cache_xlat(TALLOC_CTX *ctx, char **out, UNUSED size_t freespace,
 			      request, inst->config.key, NULL, NULL);
 	if (key_len < 0) return -1;
 
-	slen = tmpl_afrom_attr_substr(ctx, &target, fmt, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_substr(ctx, &target, fmt, &(vp_tmpl_rules_t){ .dict_def = request->dict });
 	if (slen <= 0) {
 		RPEDEBUG("Invalid key");
 		return -1;
@@ -1006,9 +989,15 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	/*
 	 *	Make sure the users don't screw up too badly.
 	 */
-	if (map_afrom_cs(&inst->maps, update,
-			 PAIR_LIST_REQUEST, PAIR_LIST_REQUEST, cache_verify, NULL, MAX_ATTRMAP) < 0) {
-		return -1;
+	{
+		vp_tmpl_rules_t	parse_rules = {
+			.allow_foreign = true	/* Because we don't know where we'll be called */
+		};
+
+		if (map_afrom_cs(&inst->maps, update,
+				 &parse_rules, &parse_rules, cache_verify, NULL, MAX_ATTRMAP) < 0) {
+			return -1;
+		}
 	}
 
 	if (!inst->maps) {

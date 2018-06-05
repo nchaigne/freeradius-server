@@ -31,8 +31,6 @@ RCSID("$Id$")
 
 #include <ctype.h>
 
-#define FR_DHCP_PARAMETER_REQUEST_LIST 55
-
 /*
  *	Define a structure for our module configuration.
  *
@@ -58,13 +56,13 @@ static ssize_t dhcp_options_xlat(UNUSED TALLOC_CTX *ctx, char **out, size_t outl
 	VALUE_PAIR	*vp, *head = NULL;
 	int		decoded = 0;
 	ssize_t		slen;
-	fr_dhcp_decoder_ctx_t	packet_ctx = {
+	fr_dhcp_ctx_t	packet_ctx = {
 				.root = fr_dict_root(fr_dict_internal)
 			};
 
 	while (isspace((int) *fmt)) fmt++;
 
-	slen = tmpl_afrom_attr_str(request, &src, fmt, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_str(request, &src, fmt, &(vp_tmpl_rules_t){ .dict_def = request->dict });
 	if (slen <= 0) {
 		REMARKER(fmt, slen, fr_strerror());
 	error:
@@ -168,37 +166,10 @@ static ssize_t dhcp_xlat(UNUSED TALLOC_CTX *ctx, char **out, size_t outlen,
 static int mod_bootstrap(void *instance, UNUSED CONF_SECTION *conf)
 {
 	rlm_dhcpv4_t *inst = instance;
-	fr_dict_attr_t const *da;
+
 
 	xlat_register(inst, "dhcp_options", dhcp_options_xlat, NULL, NULL, 0, XLAT_DEFAULT_BUF_LEN, true);
 	xlat_register(inst, "dhcp", dhcp_xlat, NULL, NULL, 0, XLAT_DEFAULT_BUF_LEN, true);
-
-	/*
-	 *	Fixup dictionary entry for DHCP-Paramter-Request-List adding all the options
-	 */
-	da = fr_dict_attr_by_num(NULL, DHCP_MAGIC_VENDOR, FR_DHCP_PARAMETER_REQUEST_LIST);
-	if (da) {
-		fr_value_box_t	value = { .type = FR_TYPE_UINT8 };
-		uint8_t		i;
-
-		/* No padding or termination options */
-		DEBUG3("Adding values for %s", da->name);
-		for (i = 1; i < 255; i++) {
-			fr_dict_attr_t const *attr;
-
-			attr = fr_dict_attr_by_num(NULL, DHCP_MAGIC_VENDOR, i);
-			if (!attr) {
-				DEBUG3("No DHCP RFC space attribute at %i", i);
-				continue;
-			}
-			value.vb_uint8 = i;
-
-			DEBUG3("Adding %s value %i %s", da->name, i, attr->name);
-			if (fr_dict_enum_add_alias(da, attr->name, &value, true, false) < 0) {
-				DEBUG3("Failed adding value: %s", fr_strerror());
-			}
-		}
-	}
 
 	return 0;
 }
@@ -206,7 +177,7 @@ static int mod_bootstrap(void *instance, UNUSED CONF_SECTION *conf)
 static int dhcp_load(void)
 {
 	if (fr_dhcpv4_init() < 0) {
-		PERROR("Failed loading DHCP dictionary");
+		PERROR("Failed initialising protocol library");
 		return -1;
 	}
 

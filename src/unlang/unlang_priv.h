@@ -228,7 +228,7 @@ typedef struct {
  *
  */
 typedef struct {
-	vp_cursor_t		cursor;				//!< Used to track our place in the list
+	fr_cursor_t		cursor;				//!< Used to track our place in the list
 								///< we're iterating over.
 	VALUE_PAIR 		*vps;				//!< List containing the attribute(s) we're
 								///< iterating over.
@@ -370,7 +370,9 @@ unlang_resume_t *unlang_resume_alloc(REQUEST *request, void *callback, void *sig
 
 void		unlang_map_init(void);
 
-void		unlang_op_initialize(void);
+int		unlang_op_init(void);
+
+void		unlang_op_free(void);
 
 #ifdef __cplusplus
 }

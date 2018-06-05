@@ -147,10 +147,12 @@ static CONF_PARSER const type_interval_config[FR_MAX_PACKET_CODE] = {
 	[FR_CODE_DISCONNECT_REQUEST] = { FR_CONF_POINTER("Disconnect-Request", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) disconnect_config },
 };
 
+static fr_dict_t *dict_freeradius;
 static fr_dict_t *dict_radius;
 
 extern fr_dict_autoload_t rlm_radius_dict[];
 fr_dict_autoload_t rlm_radius_dict[] = {
+	{ .out = &dict_freeradius, .proto = "freeradius" },
 	{ .out = &dict_radius, .proto = "radius" },
 	{ NULL }
 };
@@ -158,9 +160,11 @@ fr_dict_autoload_t rlm_radius_dict[] = {
 static fr_dict_attr_t const *attr_chap_challenge;
 static fr_dict_attr_t const *attr_chap_password;
 static fr_dict_attr_t const *attr_proxy_state;
+static fr_dict_attr_t const *attr_packet_type;
 
 extern fr_dict_attr_autoload_t rlm_radius_dict_attr[];
 fr_dict_attr_autoload_t rlm_radius_dict_attr[] = {
+	{ .out = &attr_packet_type, .name = "Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
 	{ .out = &attr_chap_challenge, .name = "CHAP-Challenge", .type = FR_TYPE_OCTETS, .dict = &dict_radius},
 	{ .out = &attr_chap_password, .name = "CHAP-Password", .type = FR_TYPE_OCTETS, .dict = &dict_radius},
 	{ .out = &attr_proxy_state, .name = "Proxy-State", .type = FR_TYPE_OCTETS, .dict = &dict_radius},
@@ -181,7 +185,6 @@ static int type_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED C
 {
 	char const		*type_str = cf_pair_value(cf_item_to_pair(ci));
 	CONF_SECTION		*cs = cf_item_to_section(cf_parent(ci));
-	fr_dict_attr_t const	*da;
 	fr_dict_enum_t const	*type_enum;
 	uint32_t		code;
 
@@ -190,17 +193,11 @@ static int type_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED C
 	 */
 	rad_assert(cs && (strcmp(cf_section_name1(cs), "radius") == 0));
 
-	da = fr_dict_attr_by_name(NULL, "Packet-Type");
-	if (!da) {
-		ERROR("Missing definiton for Packet-Type");
-		return -1;
-	}
-
 	/*
 	 *	Allow the process module to be specified by
 	 *	packet type.
 	 */
-	type_enum = fr_dict_enum_by_alias(da, type_str, -1);
+	type_enum = fr_dict_enum_by_alias(attr_packet_type, type_str, -1);
 	if (!type_enum) {
 	invalid_code:
 		cf_log_err(ci, "Unknown or invalid RADIUS packet type '%s'", type_str);
@@ -278,21 +275,14 @@ static int status_check_type_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM 
 {
 	char const		*type_str = cf_pair_value(cf_item_to_pair(ci));
 	CONF_SECTION		*cs = cf_item_to_section(cf_parent(ci));
-	fr_dict_attr_t const	*da;
 	fr_dict_enum_t const	*type_enum;
 	uint32_t		code;
-
-	da = fr_dict_attr_by_name(NULL, "Packet-Type");
-	if (!da) {
-		ERROR("Missing definiton for Packet-Type");
-		return -1;
-	}
 
 	/*
 	 *	Allow the process module to be specified by
 	 *	packet type.
 	 */
-	type_enum = fr_dict_enum_by_alias(da, type_str, -1);
+	type_enum = fr_dict_enum_by_alias(attr_packet_type, type_str, -1);
 	if (!type_enum) {
 	invalid_code:
 		cf_log_err(ci, "Unknown or invalid RADIUS packet type '%s'", type_str);
@@ -356,11 +346,17 @@ static int status_check_update_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITE
 	/*
 	 *	Compile the "update" section.
 	 */
-	rcode = map_afrom_cs(&head, cs, PAIR_LIST_REQUEST, PAIR_LIST_REQUEST, unlang_fixup_update, NULL, 128);
-	if (rcode < 0) return -1; /* message already printed */
-	if (!head) {
-		cf_log_err(cs, "'update' sections cannot be empty");
-		return -1;
+	{
+		vp_tmpl_rules_t	parse_rules = {
+			.allow_foreign = true	/* Because we don't know where we'll be called */
+		};
+
+		rcode = map_afrom_cs(&head, cs, &parse_rules, &parse_rules, unlang_fixup_update, NULL, 128);
+		if (rcode < 0) return -1; /* message already printed */
+		if (!head) {
+			cf_log_err(cs, "'update' sections cannot be empty");
+			return -1;
+		}
 	}
 
 	/*
@@ -456,10 +452,11 @@ static void radius_fixups(rlm_radius_t *inst, REQUEST *request)
 	 *	Check for proxy loops.
 	 */
 	if (RDEBUG_ENABLED) {
-		vp_cursor_t cursor;
+		fr_cursor_t cursor;
 
-		fr_pair_cursor_init(&cursor, &request->packet->vps);
-		while ((vp = fr_pair_cursor_next_by_da(&cursor, attr_proxy_state, TAG_ANY)) != NULL) {
+		for (vp = fr_cursor_iter_by_da_init(&cursor, &request->packet->vps, attr_proxy_state);
+		     vp;
+		     vp = fr_cursor_next(&cursor)) {
 			if (vp->vp_length != 4) continue;
 
 			if (memcmp(&inst->proxy_state, vp->vp_octets, 4) == 0) {
@@ -870,6 +867,19 @@ static int mod_thread_detach(fr_event_list_t *el, void *thread)
 	return 0;
 }
 
+static int mod_load(void)
+{
+	if (fr_radius_init() < 0) {
+		PERROR("Failed initialising protocol library");
+		return -1;
+	}
+	return 0;
+}
+
+static void mod_unload(void)
+{
+	fr_radius_free();
+}
 
 /*
  *	The module name should be the only globally exported symbol.
@@ -889,6 +899,8 @@ rad_module_t rlm_radius = {
 	.config		= module_config,
 	.bootstrap	= mod_bootstrap,
 	.instantiate	= mod_instantiate,
+	.load		= mod_load,
+	.unload		= mod_unload,
 
 	.thread_inst_size = sizeof(rlm_radius_thread_t),
 	.thread_instantiate = mod_thread_instantiate,

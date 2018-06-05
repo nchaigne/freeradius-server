@@ -85,7 +85,7 @@ fr_dict_attr_autoload_t rlm_digest_dict_attr[] = {
 static int digest_fix(REQUEST *request)
 {
 	VALUE_PAIR *first, *i;
-	vp_cursor_t cursor;
+	fr_cursor_t cursor;
 
 	/*
 	 *	We need both of these attributes to do the authentication.
@@ -106,36 +106,37 @@ static int digest_fix(REQUEST *request)
 	 *	Check for proper format of the Digest-Attributes
 	 */
 	RDEBUG("Checking for correctly formatted Digest-Attributes");
+	rad_assert(attr_digest_attributes);
 
-	first = fr_pair_find_by_da(request->packet->vps, attr_digest_attributes, TAG_ANY);
-	if (!first) {
-		return RLM_MODULE_NOOP;
-	}
+	first = fr_cursor_iter_by_da_init(&cursor, &request->packet->vps, attr_digest_attributes);
+	if (!first) return RLM_MODULE_NOOP;
 
-	fr_pair_cursor_init(&cursor, &first);
-	while ((i = fr_pair_cursor_next_by_da(&cursor, attr_digest_attributes, TAG_ANY))) {
-		int length = i->vp_length;
-		int attrlen;
-		uint8_t const *p = i->vp_octets;
+	for (i = fr_cursor_head(&cursor);
+	     i;
+	     i = fr_cursor_next(&cursor)) {
+		size_t attr_len;
+		uint8_t const *p = i->vp_octets, *end = i->vp_octets + i->vp_length;
+
+		RHEXDUMP(L_DBG_LVL_3, p, i->vp_length, "Validating digest attribute");
 
 		/*
 		 *	Until this stupidly encoded attribute is exhausted.
 		 */
-		while (length > 0) {
+		while (p < end) {
 			/*
 			 *	The attribute type must be valid
 			 */
 			if ((p[0] == 0) || (p[0] > 10)) {
-				RDEBUG("Not formatted as Digest-Attributes: TLV type (%u) invalid", (unsigned int) p[0]);
+				RDEBUG("Not formatted as Digest-Attributes: subtlv (%u) invalid", (unsigned int) p[0]);
 				return RLM_MODULE_NOOP;
 			}
 
-			attrlen = p[1];	/* stupid VSA format */
+			attr_len = p[1];	/* stupid VSA format */
 
 			/*
 			 *	Too short.
 			 */
-			if (attrlen < 3) {
+			if (attr_len < 3) {
 				RDEBUG("Not formatted as Digest-Attributes: TLV too short");
 				return RLM_MODULE_NOOP;
 			}
@@ -143,58 +144,35 @@ static int digest_fix(REQUEST *request)
 			/*
 			 *	Too long.
 			 */
-			if (attrlen > length) {
+			if (p + attr_len > end) {
 				RDEBUG("Not formatted as Digest-Attributes: TLV too long)");
 				return RLM_MODULE_NOOP;
 			}
 
-			length -= attrlen;
-			p += attrlen;
+
+			RHEXDUMP(L_DBG_LVL_3, p, attr_len, "Found valid sub TLV %u, length %zu", p[0], attr_len);
+
+			p += attr_len;
 		} /* loop over this one attribute */
 	}
 
 	/*
 	 *	Convert them to something sane.
 	 */
-	RDEBUG("Digest-Attributes look OK.  Converting them to something more useful");
-	fr_pair_cursor_first(&cursor);
-	while ((i = fr_pair_cursor_next_by_da(&cursor, attr_digest_attributes, TAG_ANY))) {
-		int length = i->vp_length;
-		int attrlen;
-		uint8_t const *p = &i->vp_octets[0];
-		VALUE_PAIR *sub;
+	RDEBUG("Digest-Attributes validated, unpacking into interal attributes");
+	fr_cursor_head(&cursor);
+	for (i = fr_cursor_head(&cursor);
+	     i;
+	     i = fr_cursor_next(&cursor)) {
+		size_t		attr_len;
+		uint8_t const	*p = i->vp_octets, *end = i->vp_octets + i->vp_length;
+		VALUE_PAIR	*sub;
 
 		/*
 		 *	Until this stupidly encoded attribute is exhausted.
 		 */
-		while (length > 0) {
-			/*
-			 *	The attribute type must be valid
-			 */
-			if ((p[0] == 0) || (p[0] > 10)) {
-				REDEBUG("Received Digest-Attributes with invalid sub-attribute %d", p[0]);
-				return RLM_MODULE_INVALID;
-			}
-
-			attrlen = p[1];	/* stupid VSA format */
-
-			/*
-			 *	Too short.
-			 */
-			if (attrlen < 3) {
-				REDEBUG("Received Digest-Attributes with short sub-attribute %d, of length %d",
-					p[0], attrlen);
-				return RLM_MODULE_INVALID;
-			}
-
-			/*
-			 *	Too long.
-			 */
-			if (attrlen > length) {
-				REDEBUG("Received Digest-Attributes with long sub-attribute %d, of length %d",
-					p[0], attrlen);
-				return RLM_MODULE_INVALID;
-			}
+		while (p < end) {
+			attr_len = p[1];	/* stupid VSA format */
 
 			/*
 			 *	Create a new attribute, broken out of
@@ -205,20 +183,14 @@ static int digest_fix(REQUEST *request)
 			MEM(sub = fr_pair_afrom_child_num(request->packet,
 							  fr_dict_root(dict_freeradius),
 							  attr_digest_realm->attr - 1 + p[0]));
-			fr_pair_value_bstrncpy(sub, p + 2, attrlen - 2);
+			fr_pair_value_bstrncpy(sub, p + 2, attr_len - 2);
 			fr_pair_add(&request->packet->vps, sub);
 
 			RINDENT();
 			RDEBUG2("&%pP", sub);
 			REXDENT();
 
-			/*
-			 *	FIXME: Check for the existence
-			 *	of the necessary attributes!
-			 */
-
-			length -= attrlen;
-			p += attrlen;
+			p += attr_len;
 		} /* loop over this one attribute */
 	}
 
@@ -341,7 +313,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, UNUS
 	a1[a1_len] = ':';
 	a1_len++;
 
-	if (passwd->da->attr == FR_CLEARTEXT_PASSWORD) {
+	if (passwd->da == attr_cleartext_password) {
 		memcpy(&a1[a1_len], passwd->vp_octets, passwd->vp_length);
 		a1_len += passwd->vp_length;
 		a1[a1_len] = '\0';
@@ -376,7 +348,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, UNUS
 		 *	If we find Digest-HA1, we assume it contains
 		 *	H(A1).
 		 */
-		if (passwd->da->attr == FR_CLEARTEXT_PASSWORD) {
+		if (passwd->da == attr_cleartext_password) {
 			fr_md5_calc(hash, &a1[0], a1_len);
 			fr_bin2hex((char *) &a1[0], hash, 16);
 		} else {	/* MUST be Digest-HA1 */
@@ -492,9 +464,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, UNUS
 	 *     Compute MD5 if Digest-Algorithm == "MD5-Sess",
 	 *     or if we found a User-Password.
 	 */
-	if (((algo != NULL) &&
-	     (strcasecmp(algo->vp_strvalue, "MD5-Sess") == 0)) ||
-	    (passwd->da->attr == FR_CLEARTEXT_PASSWORD)) {
+	if (((algo != NULL) && (strcasecmp(algo->vp_strvalue, "MD5-Sess") == 0)) ||
+	    (passwd->da == attr_cleartext_password)) {
 		a1[a1_len] = '\0';
 		fr_md5_calc(&hash[0], &a1[0], a1_len);
 	} else {

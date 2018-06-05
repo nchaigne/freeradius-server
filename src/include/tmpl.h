@@ -76,9 +76,8 @@ extern "C" {
 #endif
 
 typedef enum pair_lists {
-	PAIR_LIST_UNKNOWN = 0,		//!< Unknown list.
-	PAIR_LIST_REQUEST,		//!< Attributes in incoming or internally proxied
-					///< request.
+	PAIR_LIST_REQUEST = 0,		//!< Attributes in incoming or internally proxied
+					///< request (default).
 	PAIR_LIST_REPLY,		//!< Attributes to send in the response.
 	PAIR_LIST_CONTROL,		//!< Attributes that change the behaviour of
 					///< modules.
@@ -91,18 +90,20 @@ typedef enum pair_lists {
 	PAIR_LIST_PROXY_REPLY,		//!< Attributes sent in response to the proxied
 					///< request.
 #endif
+	PAIR_LIST_UNKNOWN		//!< Unknown list.
 } pair_lists_t;
 
 extern const FR_NAME_NUMBER pair_lists[];
 
 typedef enum requests {
-	REQUEST_UNKNOWN = 0,		//!< Unknown request.
+	REQUEST_CURRENT = 0,		//!< The current request (default).
 	REQUEST_OUTER,			//!< #REQUEST containing the outer layer of the EAP
 					//!< conversation. Usually the RADIUS request sent
 					//!< by the NAS.
-	REQUEST_CURRENT,		//!< The current request.
+
 	REQUEST_PARENT,			//!< Parent (whatever it is).
-	REQUEST_PROXY			//!< Proxied request
+	REQUEST_PROXY,			//!< Proxied request.
+	REQUEST_UNKNOWN			//!< Unknown request.
 } request_refs_t;
 
 extern const FR_NAME_NUMBER request_refs[];
@@ -252,7 +253,7 @@ void tmpl_verify(char const *file, int line, vp_tmpl_t const *vpt);
  * Example:
  @code{.c}
    static vp_tmpl_t list = tmpl_initialiser_list(CURRENT_REQUEST, PAIR_LIST_REQUEST);
-   vp_cursor_t cursor;
+   fr_cursor_t cursor;
    VALUE_PAIR *vp;
 
    // Iterate over all pairs in the request list
@@ -298,8 +299,6 @@ void tmpl_verify(char const *file, int line, vp_tmpl_t const *vpt);
 
    value.strvalue = talloc_typed_strdup(NULL, "my new username");
    value.length = talloc_array_length(value.strvalue) - 1;
-
-   if (fr_pair_update_by_num(ctx, head, FR_USERNAME, 0, TAG_ANY, FR_TYPE_STRING, &value) < 0) return -1; // error
  @endcode
  *
  * @param _ctx new #VALUE_PAIR s should be allocated in for the specified list.
@@ -319,6 +318,30 @@ do {\
 	}\
 } while (0)
 
+
+/** Optional arguments passed to vp_tmpl functions
+ *
+ */
+typedef struct {
+	fr_dict_t const		*dict_def;		//!< Default dictionary to use
+							///< with unqualified attribute references.
+
+	request_refs_t		request_def;		//!< Default request to use with
+							///< unqualified attribute references.
+
+	pair_lists_t		list_def;		//!< Default list to use with unqualified
+							///< attribute reference.
+
+	bool			allow_unknown;		//!< Allow unknown attributes i.e. attributes
+							///< defined by OID string.
+
+	bool			allow_undefined;	//!< Allow attributes that look valid but were
+							///< not found in the dictionaries.
+							///< This should be used as part of a multi-pass
+							///< approach to parsing.
+
+	bool			allow_foreign;		//!< Allow arguments not found in dict_def.
+} vp_tmpl_rules_t;
 
 /** Map ptr type to a boxed type
  *
@@ -381,16 +404,13 @@ void			tmpl_from_da(vp_tmpl_t *vpt, fr_dict_attr_t const *da, int8_t tag, int nu
 int			tmpl_afrom_value_box(TALLOC_CTX *ctx, vp_tmpl_t **out, fr_value_box_t *data, bool steal);
 
 ssize_t			tmpl_afrom_attr_substr(TALLOC_CTX *ctx, vp_tmpl_t **out, char const *name,
-					       request_refs_t request_def, pair_lists_t list_def,
-					       bool allow_unknown, bool allow_undefined);
+					       vp_tmpl_rules_t const *rules);
 
 ssize_t			tmpl_afrom_attr_str(TALLOC_CTX *ctx, vp_tmpl_t **out, char const *name,
-					    request_refs_t request_def,
-					    pair_lists_t list_def,
-					    bool allow_unknown, bool allow_undefined) CC_HINT(nonnull (2, 3));
+					    vp_tmpl_rules_t const *rules) CC_HINT(nonnull (2, 3));
 
 ssize_t			tmpl_afrom_str(TALLOC_CTX *ctx, vp_tmpl_t **out, char const *name, size_t inlen,
-				       FR_TOKEN type, request_refs_t request_def, pair_lists_t list_def, bool do_escape);
+				       FR_TOKEN type, vp_tmpl_rules_t const *rules, bool do_escape);
 
 int			tmpl_cast_in_place(vp_tmpl_t *vpt, fr_type_t type, fr_dict_attr_t const *enumv);
 
@@ -428,7 +448,8 @@ int			tmpl_find_or_add_vp(VALUE_PAIR **out, REQUEST *request, vp_tmpl_t const *v
 
 int			tmpl_define_unknown_attr(vp_tmpl_t *vpt);
 
-int			tmpl_define_undefined_attr(vp_tmpl_t *vpt, fr_type_t type, fr_dict_attr_flags_t const *flags);
+int			tmpl_define_undefined_attr(fr_dict_t *dict, vp_tmpl_t *vpt,
+						   fr_type_t type, fr_dict_attr_flags_t const *flags);
 
 #ifdef __cplusplus
 }

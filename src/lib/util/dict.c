@@ -2238,11 +2238,9 @@ fr_dict_attr_t const *fr_dict_unknown_afrom_fields(TALLOC_CTX *ctx, fr_dict_attr
 	/*
 	 *	The config files may reference the unknown by name.
 	 *	If so, use the pre-defined name instead of an unknown
-	 *	one.
-	 *
-	 *	@fixme: pass the root into this function!
+	 *	one.!
 	 */
-	da = fr_dict_attr_by_name(NULL, n->name);
+	da = fr_dict_attr_by_name(fr_dict_by_da(parent), n->name);
 	if (da) {
 		fr_dict_unknown_free(&parent);
 		parent = n;
@@ -2482,7 +2480,7 @@ ssize_t fr_dict_unknown_afrom_oid_substr(TALLOC_CTX *ctx, fr_dict_attr_t **out,
 	 *	Advance p until we get something that's not part of
 	 *	the dictionary attribute name.
 	 */
-	for (p = name; fr_dict_attr_allowed_chars[(int)*p] || (*p == '.') || (*p == '-'); p++);
+	for (p = name; fr_dict_attr_allowed_chars[(uint8_t)*p] || (*p == '.') || (*p == '-'); p++);
 
 	len = p - name;
 	if (len > FR_DICT_ATTR_MAX_NAME_LEN) {
@@ -2875,17 +2873,22 @@ ssize_t fr_dict_attr_by_oid(fr_dict_t *dict, fr_dict_attr_t const **parent, unsi
  */
 fr_dict_attr_t const *fr_dict_root(fr_dict_t const *dict)
 {
+	if (!dict) return fr_dict_internal->root;	/* Remove me when dictionaries are done */
 	return dict->root;
 }
 
 /** Look up a protocol name embedded in another string
  *
- * @param[in,out] name		string start.
+ * @param[out] out		the resolve dictionary or NULL if the dictionary
+ *				couldn't be resolved.
+ * @param[in] name		string start.
+ * @param[in] dict_def		The dictionary to return if no dictionary qualifier was found.
  * @return
- * 	- Attribute matching name.
- *  	- NULL if no matching attribute could be found.
+ *	- 0 and *out != NULL.  Couldn't find a dictionary qualifier, so returned dict_def.
+ *	- <= 0 on error and (*out == NULL) (offset as negative integer)
+ *	- > 0 on success (number of bytes parsed).
  */
-fr_dict_t *fr_dict_by_protocol_substr(char const **name)
+ssize_t fr_dict_by_protocol_substr(fr_dict_t **out, char const *name, fr_dict_t const *dict_def)
 {
 	fr_dict_attr_t		root;
 	fr_dict_t		find = { .root = &root };
@@ -2894,7 +2897,7 @@ fr_dict_t *fr_dict_by_protocol_substr(char const **name)
 	char const		*p;
 	size_t			len;
 
-	if (!protocol_by_name || !name || !*name) return NULL;
+	if (!protocol_by_name || !name || !*name) return 0;
 
 	memset(&root, 0, sizeof(root));
 
@@ -2902,29 +2905,39 @@ fr_dict_t *fr_dict_by_protocol_substr(char const **name)
 	 *	Advance p until we get something that's not part of
 	 *	the dictionary attribute name.
 	 */
-	for (p = *name; fr_dict_attr_allowed_chars[(int)*p] && (*p != '.'); p++);
+	for (p = name; fr_dict_attr_allowed_chars[(uint8_t)*p] && (*p != '.'); p++);
 
-	len = p - *name;
-	if (len > FR_DICT_ATTR_MAX_NAME_LEN) {
-		fr_strerror_printf("Attribute name too long");
-		return NULL;
+	/*
+	 *	If what we stopped at wasn't a '.', then there
+	 *	can't be a protocol name in this string.
+	 */
+	if (*p != '.') {
+		memcpy(out, &dict_def, sizeof(*out));
+		return 0;
 	}
 
-	root.name = talloc_bstrndup(NULL, *name, len);
+	len = p - name;
+	if (len > FR_DICT_ATTR_MAX_NAME_LEN) {
+		fr_strerror_printf("Attribute name too long");
+		return -(FR_DICT_ATTR_MAX_NAME_LEN);
+	}
+
+	root.name = talloc_bstrndup(NULL, name, len);
 	if (!root.name) {
 		fr_strerror_printf("Out of memory");
-		return NULL;
+		return 0;
 	}
 	dict = fr_hash_table_finddata(protocol_by_name, &find);
 	talloc_const_free(root.name);
 
 	if (!dict) {
-		fr_strerror_printf("Unknown protocol '%.*s'", (int) len, *name);
-		return NULL;
+		fr_strerror_printf("Unknown protocol '%.*s'", (int) len, name);
+		*out = NULL;
+		return 0;
 	}
-	*name = p;
+	*out = dict;
 
-	return dict;
+	return p - name;
 }
 
 /** Lookup a protocol by its name
@@ -3210,21 +3223,22 @@ fr_dict_attr_t const *fr_dict_vendor_attr_by_num(fr_dict_attr_t const *vendor_ro
  * If the attribute does not exist, don't advance the pointer and return
  * NULL.
  *
+ * @param[out] out		Where to store the resolve attribute.
  * @param[in] dict		of protocol context we're operating in.
  *				If NULL the internal dictionary will be used.
- * @param[in,out] name		string start.
+ * @param[in] name		string start.
  * @return
- * 	- Attribute matching name.
- *  	- NULL if no matching attribute could be found.
+ *	- <= 0 on failure.
+ *	- The number of bytes of name consumed on success.
  */
-fr_dict_attr_t const *fr_dict_attr_by_name_substr(fr_dict_t const *dict, char const **name)
+ssize_t fr_dict_attr_by_name_substr(fr_dict_attr_t const **out, fr_dict_t const *dict, char const *name)
 {
 	fr_dict_attr_t		find;
 	fr_dict_attr_t const	*da;
 	char const		*p;
 	size_t			len;
 
-	if (!name || !*name) return NULL;
+	if (!name || !*name) return 0;
 	INTERNAL_IF_NULL(dict);
 
 	memset(&find, 0, sizeof(find));
@@ -3233,29 +3247,30 @@ fr_dict_attr_t const *fr_dict_attr_by_name_substr(fr_dict_t const *dict, char co
 	 *	Advance p until we get something that's not part of
 	 *	the dictionary attribute name.
 	 */
-	for (p = *name; fr_dict_attr_allowed_chars[(int)*p]; p++);
+	for (p = name; fr_dict_attr_allowed_chars[(uint8_t)*p]; p++);
 
-	len = p - *name;
+	len = p - name;
 	if (len > FR_DICT_ATTR_MAX_NAME_LEN) {
 		fr_strerror_printf("Attribute name too long");
-		return NULL;
+		return -(FR_DICT_ATTR_MAX_NAME_LEN);
 	}
 
-	find.name = talloc_bstrndup(NULL, *name, len);
+	find.name = talloc_bstrndup(NULL, name, len);
 	if (!find.name) {
 		fr_strerror_printf("Out of memory");
-		return NULL;
+		return 0;
 	}
 	da = fr_hash_table_finddata(dict->attributes_by_name, &find);
 	talloc_const_free(find.name);
 
 	if (!da) {
-		fr_strerror_printf("Unknown attribute '%.*s'", (int) len, *name);
-		return NULL;
+		fr_strerror_printf("Unknown attribute '%.*s'", (int) len, name);
+		return 0;
 	}
-	*name = p;
 
-	return da;
+	*out = da;
+
+	return p - name;
 }
 
 /** Locate a #fr_dict_attr_t by its name
@@ -3279,33 +3294,81 @@ fr_dict_attr_t const *fr_dict_attr_by_name(fr_dict_t const *dict, char const *na
 	return fr_hash_table_finddata(dict->attributes_by_name, &find);
 }
 
-/** Lookup a #fr_dict_attr_t by its vendor and attribute numbers
+/** Locate a qualified #fr_dict_attr_t by its name and a dictionary qualifier
  *
- * @note This is a deprecated function, new code should use #fr_dict_attr_child_by_num.
+ * @note If calling this function from the server any list or request qualifiers
+ *  should be stripped first.
  *
- * @param[in] dict		of protocol context we're operating in.
- *				If NULL the internal dictionary will be used.
- * @param[in] vendor		number of the attribute.
- * @param[in] attr		number of the attribute.
+ * @param[out] err		Why parsing failed. May be NULL.
+ *				- 0 success.
+ *				- -1 if the attribute can't be found.
+ *				- -2 if the protocol can't be found.
+ * @param[out] out		Dictionary found attribute.
+ * @param[in] dict_def		Default dictionary for non-qualified dictionaries.
+ * @param[in] attr		Dictionary/Attribute name.
  * @return
- * 	- Attribute matching vendor/attr.
- * 	- NULL if no matching attribute could be found.
+ *	- <= 0 on failure.
+ *	- The number of bytes of name consumed on success.
  */
-fr_dict_attr_t const *fr_dict_attr_by_num(fr_dict_t *dict, unsigned int vendor, unsigned int attr)
+ssize_t fr_dict_attr_by_qualified_name_substr(int *err, fr_dict_attr_t const **out,
+					      fr_dict_t const *dict_def, char const *attr)
 {
-	fr_dict_attr_t const *parent;
+	fr_dict_t	*dict;
+	char const	*p = attr;
+	ssize_t		slen;
 
-	INTERNAL_IF_NULL(dict);
+	INTERNAL_IF_NULL(dict_def);
 
-	if (vendor == 0) return fr_dict_attr_child_by_num(dict->root, attr);
+	if (err) *err = 0;
 
-	parent = fr_dict_attr_child_by_num(dict->root, FR_VENDOR_SPECIFIC);
-	if (!parent) return NULL;
+	/*
+	 *	Figure out if we should use the default dictionary
+	 *	or if the string was qualified.
+	 */
+	slen = fr_dict_by_protocol_substr(&dict, p, dict_def);
+	if ((slen <= 0) && !dict) {
+		if (err) *err = -2;
+		return 0;
+	}
 
-	parent = fr_dict_attr_child_by_num(parent, vendor);
-	if (!parent) return NULL;
+	p += slen;
 
-	return fr_dict_attr_child_by_num(parent, attr);
+	slen = fr_dict_attr_by_name_substr(out, dict, p);
+	if (slen <= 0) {
+		if (err) *err = -1;
+		return -(p - attr);
+	}
+
+	p += slen;
+
+	return p - attr;
+}
+
+/** Locate a qualified #fr_dict_attr_t by its name and a dictionary qualifier
+ *
+ * @param[out] out		Dictionary found attribute.
+ * @param[in] dict_def		Default dictionary for non-qualified dictionaries.
+ * @param[in] attr		Dictionary/Attribute name.
+ * @return
+ *	- 0 on success.
+ *	- -1 if the attribute can't be found.
+ *	- -2 if the protocol can't be found.
+ *	- -3 trailing garbage in attr atring.
+ */
+int fr_dict_attr_by_qualified_name(fr_dict_attr_t const **out, fr_dict_t const *dict_def, char const *attr)
+{
+	ssize_t slen;
+	int	err = 0;
+
+	slen = fr_dict_attr_by_qualified_name_substr(&err, out, dict_def, attr);
+	if (slen <= 0) return err;
+
+	if ((size_t)slen != strlen(attr)) {
+		fr_strerror_printf("Trailing garbage after attr string \"%s\"", attr);
+		return -3;
+	}
+
+	return 0;
 }
 
 /** Lookup a attribute by its its vendor and attribute numbers and data type
@@ -3733,6 +3796,7 @@ static fr_dict_attr_t const *dict_resolve_reference(fr_dict_t *dict, char const 
 	char const		*p = ref, *q, *end = p + strlen(ref);
 	fr_dict_t		*proto_dict;
 	fr_dict_attr_t const	*da;
+	ssize_t			slen;
 
 	/*
 	 *	If the reference does not begin with .
@@ -3751,7 +3815,6 @@ static fr_dict_attr_t const *dict_resolve_reference(fr_dict_t *dict, char const 
 		}
 
 		strlcpy(buffer, p, (q - p + 1));
-		p = q;
 
 		dict = fr_dict_by_protocol_name(buffer);
 		if (!dict) {
@@ -3776,8 +3839,8 @@ static fr_dict_attr_t const *dict_resolve_reference(fr_dict_t *dict, char const 
 	if (*p == '.') {
 		p++;
 
-		da = fr_dict_attr_by_name_substr(proto_dict, &p);
-		if (!da) {
+		slen = fr_dict_attr_by_name_substr(&da, proto_dict, p);
+		if (slen <= 0) {
 			fr_strerror_printf("Referenced attribute \"%s\" not found", p);
 			return NULL;
 		}
@@ -5484,19 +5547,17 @@ int fr_dict_global_init(TALLOC_CTX *ctx, char const *dict_dir)
  */
 ssize_t fr_dict_valid_name(char const *name, ssize_t len)
 {
-	uint8_t const *p = (uint8_t const *)name, *end;
+	char const *p = name, *end;
 
 	if (len < 0) len = strlen(name);
 	end = p + len;
 
 	do {
-		if (!fr_dict_attr_allowed_chars[(int)*p]) {
-			char buff[5];
+		if (!fr_dict_attr_allowed_chars[(uint8_t)*p]) {
+			fr_strerror_printf("Invalid character '%pV' in attribute name \"%pV\"",
+					   fr_box_strvalue_len(p, 1), fr_box_strvalue_len(name, len));
 
-			fr_snprint(buff, sizeof(buff), (char const *)p, 1, '\'');
-			fr_strerror_printf("Invalid character '%s' in attribute name", buff);
-
-			return -(p - (uint8_t const *)name);
+			return -(p - name);
 		}
 		p++;
 	} while (p < end);

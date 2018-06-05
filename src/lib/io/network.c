@@ -80,6 +80,7 @@ typedef struct fr_network_socket_t {
 	fr_message_set_t	*ms;			//!< message buffers for this socket.
 	fr_channel_data_t	*cd;			//!< cached in case of allocation & read error
 	size_t			leftover;		//!< leftover data from a previous read
+	size_t			written;		//!< however much we did in a partial write
 
 	fr_channel_data_t	*pending;		//!< the currently pending partial packet
 	fr_heap_t		*waiting;		//!< packets waiting to be written
@@ -589,6 +590,12 @@ static void fr_network_write(UNUSED fr_event_list_t *el, UNUSED int sockfd, UNUS
 	rad_assert(s->pending != NULL);
 
 	/*
+	 *	@todo - this code is much the same as in
+	 *	fr_network_post_event().  Fix it so we only have one
+	 *	copy!
+	 */
+
+	/*
 	 *	Start with the currently pending message, and then
 	 *	work through the priority heap.
 	 */
@@ -598,9 +605,11 @@ static void fr_network_write(UNUSED fr_event_list_t *el, UNUSED int sockfd, UNUS
 		int rcode;
 
 		rad_assert(listen == cd->listen);
+		rad_assert(cd->m.status == FR_MESSAGE_LOCALIZED);
 
 		rcode = listen->app_io->write(listen->app_io_instance, cd->packet_ctx,
-					      cd->reply.request_time, cd->m.data, cd->m.data_size);
+					      cd->reply.request_time,
+					      cd->m.data, cd->m.data_size, 0);
 		if (rcode < 0) {
 
 			/*
@@ -629,6 +638,21 @@ static void fr_network_write(UNUSED fr_event_list_t *el, UNUSED int sockfd, UNUS
 			return;
 		}
 
+		/*
+		 *	If we've done a partial write, localize the message and continue.
+		 */
+		if ((rcode > 0) && ((size_t) rcode < cd->m.data_size)) {
+			s->written = rcode;
+			s->pending = cd;
+			return;
+		}
+
+		s->pending = NULL;
+		s->written = 0;
+
+		/*
+		 *	Reset for the next message.
+		 */
 		fr_message_done(&cd->m);
 
 		/*
@@ -1186,9 +1210,13 @@ static void fr_network_post_event(UNUSED fr_event_list_t *el, UNUSED struct time
 		 *	that NAKs are not written to the network.
 		 */
 		rcode = listen->app_io->write(listen->app_io_instance, cd->packet_ctx,
-					      cd->reply.request_time, cd->m.data, cd->m.data_size);
+					      cd->reply.request_time,
+					      cd->m.data, cd->m.data_size, 0);
 		if (rcode < 0) {
+			s->pending = 0;
+
 			if (errno == EWOULDBLOCK) {
+			save_pending:
 				if (fr_event_fd_insert(nr, nr->el, s->fd,
 						       fr_network_read,
 						       fr_network_write,
@@ -1231,14 +1259,18 @@ static void fr_network_post_event(UNUSED fr_event_list_t *el, UNUSED struct time
 		}
 
 		/*
-		 *	We MUST have written all of the data.  It is
-		 *	up to the app_io->write() function to track
-		 *	any partially written data.
+		 *	If there's a partial write, save the write
+		 *	callback for later.
 		 */
-		rad_assert(!rcode || (size_t) rcode == cd->m.data_size);
+		if ((rcode > 0) && ((size_t) rcode < cd->m.data_size)) {
+			s->written = rcode;
+			goto save_pending;
+		}
 
 		DEBUG3("Sending reply to socket %d", s->fd);
 		fr_message_done(&cd->m);
+		s->pending = NULL;
+		s->written = 0;
 
 		/*
 		 *	As a special case, allow write() to return

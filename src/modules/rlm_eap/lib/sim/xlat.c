@@ -23,6 +23,7 @@
 
 #include <freeradius-devel/radiusd.h>
 #include "sim_proto.h"
+#include "sim_attrs.h"
 
 static int sim_xlat_refs = 0;
 
@@ -41,14 +42,13 @@ static ssize_t sim_xlat_id_method(TALLOC_CTX *ctx, char **out, UNUSED size_t out
 	char const		*p = fmt, *id, *method;
 	fr_sim_id_type_t	type_hint;
 	fr_sim_method_hint_t	method_hint;
-	fr_dict_attr_t const	*da;
 
 	/*
 	 *  Trim whitespace
 	 */
 	while (isspace(*p) && p++);
 
-	slen = tmpl_afrom_attr_substr(our_ctx, &vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_substr(our_ctx, &vpt, p, NULL);
 	if (slen <= 0) {
 		RPEDEBUG("Invalid attribute reference");
 	error:
@@ -67,13 +67,7 @@ static ssize_t sim_xlat_id_method(TALLOC_CTX *ctx, char **out, UNUSED size_t out
 		goto error;
 	}
 
-	da = fr_dict_attr_by_num(NULL, 0, FR_SIM_METHOD_HINT);
-	if (!da) {
-		REDEBUG("Missing Sim-Method-Hint attribute");
-		goto error;
-	}
-
-	method = fr_dict_enum_alias_by_value(da, fr_box_uint32(method_hint));
+	method = fr_dict_enum_alias_by_value(attr_sim_method_hint, fr_box_uint32(method_hint));
 	if (!method) {
 		REDEBUG("Missing Sim-Method-Hint value");
 		goto error;
@@ -98,14 +92,13 @@ static ssize_t sim_xlat_id_type(TALLOC_CTX *ctx, char **out, UNUSED size_t outle
 	char const		*p = fmt, *id, *method;
 	fr_sim_id_type_t	type_hint;
 	fr_sim_method_hint_t	method_hint;
-	fr_dict_attr_t const	*da;
 
 	/*
 	 *  Trim whitespace
 	 */
 	while (isspace(*p) && p++);
 
-	slen = tmpl_afrom_attr_substr(our_ctx, &vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_substr(our_ctx, &vpt, p, NULL);
 	if (slen <= 0) {
 		RPEDEBUG("Invalid attribute reference");
 	error:
@@ -124,13 +117,7 @@ static ssize_t sim_xlat_id_type(TALLOC_CTX *ctx, char **out, UNUSED size_t outle
 		goto error;
 	}
 
-	da = fr_dict_attr_by_num(NULL, 0, FR_SIM_IDENTITY_TYPE);
-	if (!da) {
-		REDEBUG("Missing Sim-Method-Hint attribute");
-		goto error;
-	}
-
-	method = fr_dict_enum_alias_by_value(da, fr_box_uint32(type_hint));
+	method = fr_dict_enum_alias_by_value(attr_sim_identity_type, fr_box_uint32(type_hint));
 	if (!method) {
 		REDEBUG("Missing Sim-Method-Hint value");
 		goto error;
@@ -160,7 +147,7 @@ static ssize_t sim_xlat_3gpp_pseudonym_key_index(TALLOC_CTX *ctx, char **out, UN
 	 */
 	while (isspace(*p) && p++);
 
-	slen = tmpl_afrom_attr_substr(our_ctx, &vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_substr(our_ctx, &vpt, p, NULL);
 	if (slen <= 0) {
 		RPEDEBUG("Invalid attribute reference");
 	error:
@@ -204,7 +191,7 @@ static ssize_t sim_xlat_3gpp_pseudonym_decrypt(TALLOC_CTX *ctx, char **out, UNUS
 	 */
 	while (isspace(*p) && p++);
 
-	slen = tmpl_afrom_attr_substr(our_ctx, &id_vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_substr(our_ctx, &id_vpt, p, NULL);
 	if (slen <= 0) {
 		RPEDEBUG("Invalid ID attribute reference");
 	error:
@@ -219,7 +206,7 @@ static ssize_t sim_xlat_3gpp_pseudonym_decrypt(TALLOC_CTX *ctx, char **out, UNUS
 	}
 	p++;
 
-	slen = tmpl_afrom_attr_substr(our_ctx, &key_vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_substr(our_ctx, &key_vpt, p, NULL);
 	if (slen <= 0) {
 		RPEDEBUG("Invalid key attribute reference");
 		goto error;
@@ -307,7 +294,7 @@ static ssize_t sim_xlat_3gpp_pseudonym_encrypt(TALLOC_CTX *ctx, char **out, UNUS
 	 */
 	while (isspace(*p) && p++);
 
-	slen = tmpl_afrom_attr_substr(our_ctx, &id_vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_substr(our_ctx, &id_vpt, p, NULL);
 	if (slen <= 0) {
 		RPEDEBUG("Invalid ID attribute reference");
 	error:
@@ -322,7 +309,7 @@ static ssize_t sim_xlat_3gpp_pseudonym_encrypt(TALLOC_CTX *ctx, char **out, UNUS
 	}
 	p++;
 
-	slen = tmpl_afrom_attr_substr(our_ctx, &key_vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
+	slen = tmpl_afrom_attr_substr(our_ctx, &key_vpt, p, NULL);
 	if (slen <= 0) {
 		RPEDEBUG("Invalid key attribute reference");
 		goto error;

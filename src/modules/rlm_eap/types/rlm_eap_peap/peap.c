@@ -270,7 +270,7 @@ static VALUE_PAIR *eap_peap_inner_to_pairs(UNUSED REQUEST *request, RADIUS_PACKE
 	size_t 		total;
 	uint8_t		*p;
 	VALUE_PAIR	*vp = NULL, *head = NULL;
-	vp_cursor_t	cursor;
+	fr_cursor_t	cursor;
 
 	if (data_len > 65535) return NULL; /* paranoia */
 
@@ -293,8 +293,8 @@ static VALUE_PAIR *eap_peap_inner_to_pairs(UNUSED REQUEST *request, RADIUS_PACKE
 	memcpy(p + EAP_HEADER_LEN, data, total);
 	fr_pair_value_memsteal(vp, p);
 
-	fr_pair_cursor_init(&cursor, &head);
-	fr_pair_cursor_append(&cursor, vp);
+	fr_cursor_init(&cursor, &head);
+	fr_cursor_append(&cursor, vp);
 	while (total < data_len) {
 		vp = fr_pair_afrom_da(packet, attr_eap_message);
 		if (!vp) {
@@ -306,7 +306,7 @@ static VALUE_PAIR *eap_peap_inner_to_pairs(UNUSED REQUEST *request, RADIUS_PACKE
 
 		total += vp->vp_length;
 
-		fr_pair_cursor_append(&cursor, vp);
+		fr_cursor_append(&cursor, vp);
 	}
 
 	return head;
@@ -321,7 +321,7 @@ static int eap_peap_inner_from_pairs(REQUEST *request, tls_session_t *tls_sessio
 {
 	rad_assert(vp != NULL);
 	VALUE_PAIR *this;
-	vp_cursor_t cursor;
+	fr_cursor_t cursor;
 
 	/*
 	 *	Send the EAP data in the first attribute, WITHOUT the
@@ -333,10 +333,10 @@ static int eap_peap_inner_from_pairs(REQUEST *request, tls_session_t *tls_sessio
 	/*
 	 *	Send the rest of the EAP data, but skipping the first VP.
 	 */
-	fr_pair_cursor_init(&cursor, &vp);
-	for (this = fr_pair_cursor_next(&cursor);
+	fr_cursor_init(&cursor, &vp);
+	for (this = fr_cursor_next(&cursor);
 	     this;
-	     this = fr_pair_cursor_next(&cursor)) {
+	     this = fr_cursor_next(&cursor)) {
 		(tls_session->record_from_buff)(&tls_session->clean_in, this->vp_octets, this->vp_length);
 	}
 
@@ -999,7 +999,7 @@ rlm_rcode_t eap_peap_process(eap_session_t *eap_session, tls_session_t *tls_sess
 			request->proxy->packet->src_port = 0;
 			request->proxy->packet->dst_port = 0;
 			fake->packet = NULL;
-			fr_radius_free(&fake->reply);
+			fr_radius_packet_free(&fake->reply);
 			fake->reply = NULL;
 
 			/*
@@ -1078,7 +1078,7 @@ static int CC_HINT(nonnull) setup_fake_request(REQUEST *request, REQUEST *fake, 
 	 *	Tell the request that it's a fake one.
 	 */
 	MEM(fr_pair_add_by_da(fake->packet, &vp, &fake->packet->vps, attr_freeradius_proxied_to) >= 0);
-	fr_pair_value_from_str(vp, "127.0.0.1", sizeof("127.0.0.1"));
+	fr_pair_value_from_str(vp, "127.0.0.1", sizeof("127.0.0.1"), '\0', false);
 
 	if (t->username) {
 		vp = fr_pair_copy(fake->packet, t->username);

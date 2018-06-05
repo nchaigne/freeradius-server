@@ -186,20 +186,63 @@ void		fr_pair_list_verify(char const *file, int line, TALLOC_CTX const *expected
 
 /* Allocation and management */
 VALUE_PAIR	*fr_pair_alloc(TALLOC_CTX *ctx);
+
 VALUE_PAIR	*fr_pair_afrom_da(TALLOC_CTX *ctx, fr_dict_attr_t const *da);
+
 VALUE_PAIR	*fr_pair_afrom_num(TALLOC_CTX *ctx, unsigned int vendor, unsigned int attr);
+
 VALUE_PAIR	*fr_pair_afrom_child_num(TALLOC_CTX *ctx, fr_dict_attr_t const *parent, unsigned int attr);
+
+ssize_t		fr_pair_afrom_substr(TALLOC_CTX *ctx, VALUE_PAIR **out,
+				     fr_dict_t const *dict, char const *in, bool tainted);
+
 VALUE_PAIR	*fr_pair_copy(TALLOC_CTX *ctx, VALUE_PAIR const *vp);
+
 void		fr_pair_steal(TALLOC_CTX *ctx, VALUE_PAIR *vp);
+
 VALUE_PAIR	*fr_pair_make(TALLOC_CTX *ctx, VALUE_PAIR **vps, char const *attribute, char const *value, FR_TOKEN op);
+
 void		fr_pair_list_free(VALUE_PAIR **);
+
 int		fr_pair_to_unknown(VALUE_PAIR *vp);
+
 int 		fr_pair_mark_xlat(VALUE_PAIR *vp, char const *value);
 
 /* Searching and list modification */
+
 void		*fr_pair_iter_next_by_da(void **prev, void *to_eval, void *uctx);
 
 void		*fr_pair_iter_next_by_ancestor(void **prev, void *to_eval, void *uctx);
+
+/** Initialise a cursor that will return only attributes matching the specified #fr_dict_attr_t
+ *
+ * @param[in] cursor	to initialise.
+ * @param[in] list	to iterate over.
+ * @param[in] da	to search for.
+ * @return
+ *	- The first matching pair.
+ *	- NULL if no pairs match.
+ */
+static inline VALUE_PAIR *fr_cursor_iter_by_da_init(fr_cursor_t *cursor,
+						    VALUE_PAIR **list, fr_dict_attr_t const *da)
+{
+	return fr_cursor_talloc_iter_init(cursor, list, fr_pair_iter_next_by_da, da, VALUE_PAIR);
+}
+
+/** Initialise a cursor that will return only attributes descended from the specified #fr_dict_attr_t
+ *
+ * @param[in] cursor	to initialise.
+ * @param[in] list	to iterate over.
+ * @param[in] da	who's decentness to search for.
+ * @return
+ *	- The first matching pair.
+ *	- NULL if no pairs match.
+ */
+static inline VALUE_PAIR *fr_cursor_iter_by_ancestor_init(fr_cursor_t *cursor,
+							  VALUE_PAIR **list, fr_dict_attr_t const *da)
+{
+	return fr_cursor_talloc_iter_init(cursor, list, fr_pair_iter_next_by_ancestor, da, VALUE_PAIR);
+}
 
 VALUE_PAIR	*fr_pair_find_by_da(VALUE_PAIR *head, fr_dict_attr_t const *da, int8_t tag);
 
@@ -211,12 +254,6 @@ VALUE_PAIR	*fr_pair_find_by_child_num(VALUE_PAIR *head, fr_dict_attr_t const *pa
 void		fr_pair_add(VALUE_PAIR **head, VALUE_PAIR *vp);
 
 void		fr_pair_replace(VALUE_PAIR **head, VALUE_PAIR *add);
-
-int		fr_pair_update_by_num(TALLOC_CTX *ctx, VALUE_PAIR **list,
-				      unsigned int vendor, unsigned int attr, int8_t tag,
-				      fr_value_box_t *value);
-
-void		fr_pair_delete_by_num(VALUE_PAIR **head, unsigned int vendor, unsigned int attr, int8_t tag);
 
 void		fr_pair_delete_by_child_num(VALUE_PAIR **head, fr_dict_attr_t const *parent,
 					    unsigned int attr, int8_t tag);
@@ -266,7 +303,7 @@ int		fr_pair_list_move_by_ancestor(TALLOC_CTX *ctx, VALUE_PAIR **to,
 					      VALUE_PAIR **from, fr_dict_attr_t const *da);
 
 /* Value manipulation */
-int		fr_pair_value_from_str(VALUE_PAIR *vp, char const *value, ssize_t len);
+int		fr_pair_value_from_str(VALUE_PAIR *vp, char const *value, ssize_t len, char quote, bool tainted);
 void		fr_pair_value_memcpy(VALUE_PAIR *vp, uint8_t const *src, size_t len);
 void		fr_pair_value_memsteal(VALUE_PAIR *vp, uint8_t const *src);
 void		fr_pair_value_strsteal(VALUE_PAIR *vp, char const *src);

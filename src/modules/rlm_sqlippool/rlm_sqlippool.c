@@ -414,9 +414,8 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 		return -1;
 	}
 
-	inst->framed_ip_address = fr_dict_attr_by_name(NULL, inst->attribute_name);
-	if (!inst->framed_ip_address) {
-		cf_log_err(conf, "Unknown attribute '%s'", inst->attribute_name);
+	if (fr_dict_attr_by_qualified_name(&inst->framed_ip_address, dict_freeradius, inst->attribute_name) < 0) {
+		cf_log_perr(conf, "Failed resolving attribute");
 		return -1;
 	}
 
@@ -581,7 +580,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, UNUSED void *t
 	 *	error out.  If so, add it to the list.
 	 */
 	MEM(vp = fr_pair_afrom_da(request->reply, inst->framed_ip_address));
-	if (fr_pair_value_from_str(vp, allocation, allocation_len) < 0) {
+	if (fr_pair_value_from_str(vp, allocation, allocation_len, '\0', true) < 0) {
 		DO_PART(allocate_commit);
 
 		RDEBUG("Invalid IP number [%s] returned from instbase query.", allocation);

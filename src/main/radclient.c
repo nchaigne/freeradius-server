@@ -825,7 +825,7 @@ static void deallocate_id(rc_request_t *request)
 	 *	authentication vector.
 	 */
 	if (request->packet->data) TALLOC_FREE(request->packet->data);
-	if (request->reply) fr_radius_free(&request->reply);
+	if (request->reply) fr_radius_packet_free(&request->reply);
 }
 
 /*
@@ -1073,7 +1073,7 @@ static int recv_one_packet(int wait_time)
 	if (!packet_p) {
 		ERROR("Received reply to request we did not send. (id=%d socket %d)",
 		      reply->id, reply->sockfd);
-		fr_radius_free(&reply);
+		fr_radius_packet_free(&reply);
 		return -1;	/* got reply to packet we didn't send */
 	}
 	request = fr_packet2myptr(rc_request_t, packet, packet_p);
@@ -1126,6 +1126,8 @@ static int recv_one_packet(int wait_time)
 		stats.rejected++;
 	}
 
+	fr_strerror();	/* Clear strerror buffer */
+
 	/*
 	 *	If we had an expected response code, check to see if the
 	 *	packet matched that.
@@ -1163,8 +1165,8 @@ static int recv_one_packet(int wait_time)
 	}
 
 packet_done:
-fr_radius_free(&request->reply);
-	fr_radius_free(&reply);	/* may be NULL */
+fr_radius_packet_free(&request->reply);
+	fr_radius_packet_free(&reply);	/* may be NULL */
 
 	return 0;
 }
@@ -1181,7 +1183,6 @@ int main(int argc, char **argv)
 	int		parallel = 1;
 	rc_request_t	*this;
 	int		force_af = AF_UNSPEC;
-	fr_dict_t	*dict = NULL;
 	TALLOC_CTX	*autofree = talloc_autofree_context();
 
 	/*
@@ -1387,7 +1388,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (fr_dict_read(dict, radius_dir, FR_DICTIONARY_FILE) == -1) {
+	if (fr_dict_read(dict_freeradius, radius_dir, FR_DICTIONARY_FILE) == -1) {
 		fr_log_perror(&default_log, L_ERR, "Failed to initialize the dictionaries");
 		return 1;
 	}

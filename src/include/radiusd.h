@@ -111,8 +111,6 @@ typedef struct main_config {
 
 	uint32_t	max_request_time;		//!< How long a request can be processed for before
 							//!< timing out.
-	uint32_t	continuation_timeout;		//!< How long to wait before cleaning up state entries.
-	uint32_t	max_requests;
 
 	uint32_t	num_networks;			//!< number of network threads
 	uint32_t	num_workers;			//!< number of network threads
@@ -214,6 +212,8 @@ struct rad_request {
 	uint64_t		child_number; 	//!< Monotonically increasing number for children of this request
 	char const		*name;		//!< for debug printing, as (%d) is no longer sufficient
 
+	fr_dict_t const		*dict;		//!< Dictionary of the protocol that this request belongs to.
+
 	fr_event_list_t		*el;		//!< thread-specific event list.
 	fr_heap_t		*backlog;	//!< thread-specific backlog
 	fr_request_state_t	request_state;	//!< state for the various protocol handlers.
@@ -296,7 +296,6 @@ struct rad_request {
 #define SECONDS_PER_DAY		86400
 #define MAX_REQUEST_TIME	30
 #define CLEANUP_DELAY		5
-#define MAX_REQUESTS		256
 #define RETRY_DELAY		5
 #define RETRY_COUNT		3
 #define DEAD_TIME		120
@@ -440,7 +439,6 @@ int		pairlist_read(TALLOC_CTX *ctx, char const *file, PAIR_LIST **list, int comp
 void		pairlist_free(PAIR_LIST **);
 
 /* auth.c */
-char	*auth_name(char *buf, size_t buflen, REQUEST *request, bool do_cli);
 rlm_rcode_t    	rad_authenticate (REQUEST *);
 rlm_rcode_t    	rad_postauth(REQUEST *);
 rlm_rcode_t    	rad_virtual_server(REQUEST *);

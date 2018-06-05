@@ -44,13 +44,13 @@ static int _map_proc_client_get_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *r
 {
 	client_get_vp_ctx_t	*client = uctx;
 	VALUE_PAIR		*head = NULL, *vp;
-	vp_cursor_t		cursor;
+	fr_cursor_t		cursor;
 	fr_dict_attr_t const	*da;
 	CONF_PAIR const		*cp;
 
 	rad_assert(ctx != NULL);
 
-	fr_pair_cursor_init(&cursor, &head);
+	fr_cursor_init(&cursor, &head);
 
 	/*
 	 *	FIXME: allow multiple entries.
@@ -65,7 +65,7 @@ static int _map_proc_client_get_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *r
 			return -1;
 		}
 
-		da = fr_dict_attr_by_name(NULL, attr);
+		da = fr_dict_attr_by_name(request->dict, attr);
 		if (!da) {
 			RWDEBUG("No such attribute '%s'", attr);
 			return -1;
@@ -80,7 +80,7 @@ static int _map_proc_client_get_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *r
 		char const *value = cf_pair_value(cp);
 
 		MEM(vp = fr_pair_afrom_da(ctx, da));
-		if (fr_pair_value_from_str(vp, value, talloc_array_length(value) - 1) < 0) {
+		if (fr_pair_value_from_str(vp, value, talloc_array_length(value) - 1, '\0', false) < 0) {
 			RWDEBUG("Failed parsing value \"%pV\" for attribute %s: %s", fr_box_strvalue(value),
 				map->lhs->tmpl_da->name, fr_strerror());
 			fr_pair_list_free(&head);
@@ -89,7 +89,7 @@ static int _map_proc_client_get_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *r
 		}
 
 		vp->op = map->op;
-		fr_pair_cursor_merge(&cursor, vp);
+		fr_cursor_append(&cursor, vp);
 
 		if (map->op != T_OP_ADD) break;	/* Create multiple attribute for multiple CONF_PAIRs */
 	}

@@ -29,7 +29,6 @@
 RCSIDH(sim_h, "$Id$")
 
 #include <assert.h>
-#include "dict.h"
 #include "id.h"
 #include "eap_types.h"
 #include "eap_sim_common.h"
@@ -222,8 +221,6 @@ typedef struct {
 typedef struct _eap_session eap_session_t;
 
 extern size_t const fr_sim_attr_sizes[FR_TYPE_MAX + 1][2];
-extern fr_dict_attr_t const *dict_sim_root;
-extern fr_dict_attr_t const *dict_aka_root;
 
 /*
  *	decode.c
@@ -248,7 +245,9 @@ size_t		fr_sim_attr_len(VALUE_PAIR const *vp);
 
 size_t		fr_sim_octets_prefix_len(fr_dict_attr_t const *da);
 
-int		fr_sim_global_init(void);
+int		fr_sim_init(void);
+
+void		fr_sim_free(void);
 
 /*
  *	crypto.c

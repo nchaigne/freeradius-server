@@ -67,26 +67,26 @@ static inline void exfile_trigger_exec(exfile_t *ef, REQUEST *request, exfile_en
 	char			name[128];
 	VALUE_PAIR		*vp, *args;
 	fr_dict_attr_t const	*da;
-	vp_cursor_t		cursor;
+	fr_cursor_t		cursor;
 
 	rad_assert(ef != NULL);
 	rad_assert(name_suffix != NULL);
 
 	if (!ef->trigger_prefix) return;
 
-	da = fr_dict_attr_by_num(fr_dict_internal, 0, FR_EXFILE_NAME);
+	da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_EXFILE_NAME);
 	if (!da) {
 		ROPTIONAL(RERROR, ERROR, "Incomplete internal dictionary: Missing definition for \"Exfile-Name\"");
 		return;
 	}
 
 	args = ef->trigger_args;
-	fr_pair_cursor_init(&cursor, &args);
+	fr_cursor_init(&cursor, &args);
 
 	MEM(vp = fr_pair_afrom_da(NULL, da));
 	fr_pair_value_strcpy(vp, entry->filename);
 
-	fr_pair_cursor_prepend(&cursor, vp);
+	fr_cursor_prepend(&cursor, vp);
 
 	snprintf(name, sizeof(name), "%s.%s", ef->trigger_prefix, name_suffix);
 	trigger_exec(request, ef->conf, name, false, args);

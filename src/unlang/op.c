@@ -39,6 +39,22 @@ RCSID("$Id$")
 #define unlang_policy unlang_group
 #define unlang_break unlang_return
 
+static fr_dict_t *dict_freeradius;
+
+extern fr_dict_autoload_t op_dict[];
+fr_dict_autoload_t op_dict[] = {
+	{ .out = &dict_freeradius, .proto = "freeradius" },
+	{ NULL }
+};
+
+static fr_dict_attr_t const *attr_request_lifetime;
+
+extern fr_dict_attr_autoload_t op_dict_attr[];
+fr_dict_attr_autoload_t op_dict_attr[] = {
+	{ .out = &attr_request_lifetime, .name = "Request-Lifetime", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
+	{ NULL }
+};
+
 /*
  *	Recursively collect active callers.  Slow, but correct.
  */
@@ -620,7 +636,7 @@ static unlang_action_t unlang_detach(REQUEST *request,
 	/*
 	 *	Set Request Lifetime
 	 */
-	vp = fr_pair_find_by_num(request->control, 0, FR_REQUEST_LIFETIME, TAG_ANY);
+	vp = fr_pair_find_by_da(request->control, attr_request_lifetime, TAG_ANY);
 	if (!vp || (vp->vp_uint32 > 0)) {
 		struct timeval when;
 		const fr_event_timer_t **ev_p;
@@ -1362,7 +1378,7 @@ static unlang_action_t unlang_foreach(REQUEST *request,
 		 *	behaviour if someone decides to add or remove VPs in the set we're
 		 *	iterating over.
 		 */
-		if (tmpl_copy_vps(request, &vps, request, g->vpt) < 0) {	/* nothing to loop over */
+		if (tmpl_copy_vps(stack, &vps, request, g->vpt) < 0) {	/* nothing to loop over */
 			*presult = RLM_MODULE_NOOP;
 			*priority = instruction->actions[RLM_MODULE_NOOP];
 			return UNLANG_ACTION_CALCULATE_RESULT;
@@ -1371,20 +1387,19 @@ static unlang_action_t unlang_foreach(REQUEST *request,
 		MEM(frame->state = foreach = talloc_zero(stack, unlang_frame_state_foreach_t));
 
 		rad_assert(vps != NULL);
-		fr_pair_cursor_init(&foreach->cursor, &vps);
 
 		foreach->depth = foreach_depth;
 		foreach->vps = vps;
+		fr_cursor_talloc_init(&foreach->cursor, &foreach->vps, VALUE_PAIR);
 #ifndef NDEBUG
 		foreach->indent = request->log.unlang_indent;
 #endif
 
-		vp = fr_pair_cursor_first(&foreach->cursor);
-
+		vp = fr_cursor_head(&foreach->cursor);
 	} else {
 		foreach = talloc_get_type_abort(frame->state, unlang_frame_state_foreach_t);
 
-		vp = fr_pair_cursor_next(&foreach->cursor);
+		vp = fr_cursor_next(&foreach->cursor);
 
 		/*
 		 *	We've been asked to unwind to the
@@ -1643,8 +1658,11 @@ static unlang_action_t unlang_if(REQUEST *request,
 	return unlang_group(request, presult, priority);
 }
 
-void unlang_op_initialize(void)
+int unlang_op_init(void)
 {
+	if (fr_dict_autoload(op_dict) < 0) return -1;
+	if (fr_dict_attr_autoload(op_dict_attr) < 0) return -1;
+
 	unlang_op_register(UNLANG_TYPE_FUNCTION,
 			   &(unlang_op_t){
 				.name = "function",
@@ -1770,4 +1788,11 @@ void unlang_op_initialize(void)
 	unlang_map_init();
 	unlang_module_init();
 #endif
+
+	return 0;
+}
+
+void unlang_op_free(void)
+{
+	fr_dict_autofree(op_dict);
 }

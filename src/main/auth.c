@@ -34,37 +34,6 @@ RCSID("$Id$")
 #include <ctype.h>
 
 /*
- *	Return a short string showing the terminal server, port
- *	and calling station ID.
- */
-char *auth_name(char *buf, size_t buflen, REQUEST *request, bool do_cli)
-{
-	VALUE_PAIR	*cli;
-	VALUE_PAIR	*pair;
-	uint32_t	port = 0;	/* RFC 2865 NAS-Port is 4 bytes */
-	char const	*tls = "";
-
-	if ((cli = fr_pair_find_by_num(request->packet->vps, 0, FR_CALLING_STATION_ID, TAG_ANY)) == NULL) {
-		do_cli = false;
-	}
-
-	if ((pair = fr_pair_find_by_num(request->packet->vps, 0, FR_NAS_PORT, TAG_ANY)) != NULL) {
-		port = pair->vp_uint32;
-	}
-
-	if (request->packet->dst_port == 0) {
-		tls = " via proxy to virtual server";
-	}
-
-	snprintf(buf, buflen, "from client %.128s port %u%s%.128s%s",
-			request->client->shortname, port,
-		 (do_cli ? " cli " : ""), (do_cli ? cli->vp_strvalue : ""),
-		 tls);
-
-	return buf;
-}
-
-/*
  *	Check password.
  *
  *	Returns:	0  OK
@@ -76,24 +45,31 @@ char *auth_name(char *buf, size_t buflen, REQUEST *request, bool do_cli)
  */
 static int CC_HINT(nonnull) rad_check_password(REQUEST *request)
 {
-	vp_cursor_t	cursor;
-	VALUE_PAIR	*auth_type_pair;
-	int		auth_type = -1;
-	int		result;
-	int		auth_type_count = 0;
+	fr_cursor_t		cursor;
+	VALUE_PAIR		*auth_type_pair;
+	int			auth_type = -1;
+	int			result;
+	int			auth_type_count = 0;
+	fr_dict_attr_t const	*da;
+
+	da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_AUTH_TYPE);
+	if (!da) {
+		RERROR("Missing definition for Auth-Type");
+		return -1;
+	}
 
 	/*
 	 *	Look for matching check items. We skip the whole lot
 	 *	if the authentication type is FR_AUTH_TYPE_ACCEPT or
 	 *	FR_AUTH_TYPE_REJECT.
 	 */
-	fr_pair_cursor_init(&cursor, &request->control);
-	while ((auth_type_pair = fr_pair_cursor_next_by_num(&cursor, 0, FR_AUTH_TYPE, TAG_ANY))) {
+	for (auth_type_pair = fr_cursor_iter_by_da_init(&cursor, &request->control, da);
+	     auth_type_pair;
+	     auth_type_pair = fr_cursor_next(&cursor)) {
 		auth_type = auth_type_pair->vp_uint32;
 		auth_type_count++;
 
-		RDEBUG2("Using 'Auth-Type = %s' for authenticate {...}",
-			fr_dict_enum_alias_by_value(auth_type_pair->da, fr_box_uint32(auth_type)));
+		RDEBUG2("Using '%pP' for authenticate {...}", auth_type_pair);
 		if (auth_type == FR_AUTH_TYPE_REJECT) {
 			RDEBUG2("Auth-Type = Reject, rejecting user");
 
@@ -219,7 +195,6 @@ rlm_rcode_t rad_postauth(REQUEST *request)
 	case RLM_MODULE_USERLOCK:
 	default:
 		request->reply->code = FR_CODE_ACCESS_REJECT;
-		fr_state_discard(global_state, request, request->packet);
 		rcode = RLM_MODULE_REJECT;
 		break;
 	/*
@@ -236,13 +211,6 @@ rlm_rcode_t rad_postauth(REQUEST *request)
 	case RLM_MODULE_OK:
 	case RLM_MODULE_UPDATED:
 		rcode = RLM_MODULE_OK;
-
-		if (request->reply->code == FR_CODE_ACCESS_CHALLENGE) {
-			fr_request_to_state(global_state, request, request->packet, request->reply);
-
-		} else {
-			fr_state_discard(global_state, request, request->packet);
-		}
 		break;
 	}
 	return rcode;
@@ -276,11 +244,6 @@ rlm_rcode_t rad_authenticate(REQUEST *request)
 	if (!request->password) {
 		request->password = fr_pair_find_by_num(request->packet->vps, 0, FR_CHAP_PASSWORD, TAG_ANY);
 	}
-
-	/*
-	 *	Grab the VPS and data associated with the State attribute.
-	 */
-	fr_state_to_request(global_state, request, request->packet);
 
 	/*
 	 *	Get the user's authorization information from the database
@@ -529,10 +492,10 @@ skip:
 	rcode = rad_authenticate(request);
 
 	if (request->reply->code == FR_CODE_ACCESS_REJECT) {
-		fr_pair_delete_by_num(&request->control, 0, FR_POST_AUTH_TYPE, TAG_ANY);
+		fr_pair_delete_by_child_num(&request->control, fr_dict_root(fr_dict_internal), FR_POST_AUTH_TYPE, TAG_ANY);
 
-		MEM(vp = fr_pair_afrom_num(request, 0, FR_POST_AUTH_TYPE));
-		fr_pair_value_from_str(vp, "Reject", -1);
+		MEM(vp = fr_pair_afrom_child_num(request, fr_dict_root(fr_dict_internal), FR_POST_AUTH_TYPE));
+		fr_pair_value_from_str(vp, "Reject", -1, '\0', false);
 		fr_pair_add(&request->control, vp);
 
 		rad_postauth(request);

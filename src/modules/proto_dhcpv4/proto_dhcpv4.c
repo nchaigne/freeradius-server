@@ -30,8 +30,27 @@
 #include "proto_dhcpv4.h"
 
 extern fr_app_t proto_dhcpv4;
+static int priority_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule);
 static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, CONF_PARSER const *rule);
 static int transport_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, CONF_PARSER const *rule);
+
+static const CONF_PARSER priority_config[] = {
+	{ FR_CONF_OFFSET("DHCP-Discover", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_DISCOVER]),
+	  .func = priority_parse, .dflt = "normal" },
+	{ FR_CONF_OFFSET("DHCP-Request", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_REQUEST]),
+	  .func = priority_parse, .dflt = "normal" },
+	{ FR_CONF_OFFSET("DHCP-Decline", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_DECLINE]),
+	  .func = priority_parse, .dflt = "normal" },
+	{ FR_CONF_OFFSET("DHCP-Release", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_RELEASE]),
+	  .func = priority_parse, .dflt = "normal" },
+	{ FR_CONF_OFFSET("DHCP-Inform", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_INFORM]),
+	  .func = priority_parse, .dflt = "normal" },
+	{ FR_CONF_OFFSET("DHCP-Lease-Query", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_LEASE_QUERY]),
+	  .func = priority_parse, .dflt = "low" },
+	{ FR_CONF_OFFSET("DHCP-Bulk-Lease-Query", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_BULK_LEASE_QUERY]),
+	  .func = priority_parse, .dflt = "low" },
+	CONF_PARSER_TERMINATOR
+};
 
 static CONF_PARSER const limit_config[] = {
 	{ FR_CONF_OFFSET("idle_timeout", FR_TYPE_TIMEVAL, proto_dhcpv4_t, io.idle_timeout), .dflt = "30.0" } ,
@@ -46,6 +65,7 @@ static CONF_PARSER const limit_config[] = {
 	 */
 	{ FR_CONF_OFFSET("max_packet_size", FR_TYPE_UINT32, proto_dhcpv4_t, max_packet_size) } ,
 	{ FR_CONF_OFFSET("num_messages", FR_TYPE_UINT32, proto_dhcpv4_t, num_messages) } ,
+	{ FR_CONF_POINTER("priority", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) priority_config },
 
 	CONF_PARSER_TERMINATOR
 };
@@ -79,46 +99,24 @@ fr_dict_autoload_t proto_dhcpv4_dict[] = {
 	{ NULL }
 };
 
-static fr_dict_attr_t const *attr_dhcpv4_message_type;
+static fr_dict_attr_t const *attr_message_type;
 
 extern fr_dict_attr_autoload_t proto_dhcpv4_dict_attr[];
 fr_dict_attr_autoload_t proto_dhcpv4_dict_attr[] = {
-	{ .out = &attr_dhcpv4_message_type, .name = "DHCP-Message-Type", .type = FR_TYPE_UINT8, .dict = &dict_dhcpv4},
+	{ .out = &attr_message_type, .name = "DHCP-Message-Type", .type = FR_TYPE_UINT8, .dict = &dict_dhcpv4},
 	{ NULL }
 };
 
-/*
- *	Allow configurable priorities for each listener.
- */
-static uint32_t priorities[FR_DHCP_MAX] = {
-	[FR_DHCP_DISCOVER] = PRIORITY_NORMAL,
-	[FR_DHCP_REQUEST] = PRIORITY_NORMAL,
-	[FR_DHCP_DECLINE] = PRIORITY_NORMAL,
-	[FR_DHCP_RELEASE] = PRIORITY_NORMAL,
-	[FR_DHCP_INFORM] = PRIORITY_NORMAL,
-	[FR_DHCP_LEASE_QUERY] = PRIORITY_LOW,
-	[FR_DHCP_BULK_LEASE_QUERY] = PRIORITY_LOW,
-};
+static int priority_parse(UNUSED TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule)
+{
+	int32_t priority;
 
+	if (cf_pair_in_table(&priority, channel_packet_priority, cf_item_to_pair(ci)) < 0) return -1;
 
-static const CONF_PARSER priority_config[] = {
-	{ FR_CONF_OFFSET("DHCP-Discover", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_DISCOVER]),
-	  .dflt = STRINGIFY(PRIORITY_NORMAL) },
-	{ FR_CONF_OFFSET("DHCP-Request", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_REQUEST]),
-	  .dflt = STRINGIFY(PRIORITY_NORMAL) },
-	{ FR_CONF_OFFSET("DHCP-Decline", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_DECLINE]),
-	  .dflt = STRINGIFY(PRIORITY_NORMAL) },
-	{ FR_CONF_OFFSET("DHCP-Release", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_RELEASE]),
-	  .dflt = STRINGIFY(PRIORITY_NORMAL) },
-	{ FR_CONF_OFFSET("DHCP-Inform", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_INFORM]),
-	  .dflt = STRINGIFY(PRIORITY_NORMAL) },
-	{ FR_CONF_OFFSET("DHCP-Lease-Query", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_LEASE_QUERY]),
-	  .dflt = STRINGIFY(PRIORITY_LOW) },
-	{ FR_CONF_OFFSET("DHCP-Bulk-Lease-Query", FR_TYPE_UINT32, proto_dhcpv4_t, priorities[FR_DHCP_BULK_LEASE_QUERY]),
-	  .dflt = STRINGIFY(PRIORITY_LOW) },
-	CONF_PARSER_TERMINATOR
-};
+	*((uint32_t *)out) = (uint32_t)priority;
 
+	return 0;
+}
 
 /** Wrapper around dl_instance which translates the packet-type into a submodule name
  *
@@ -160,7 +158,7 @@ static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PAR
 	 *	Allow the process module to be specified by
 	 *	packet type.
 	 */
-	type_enum = fr_dict_enum_by_alias(attr_dhcpv4_message_type, type_str, -1);
+	type_enum = fr_dict_enum_by_alias(attr_message_type, type_str, -1);
 	if (!type_enum) {
 		cf_log_err(ci, "Invalid type \"%s\"", type_str);
 		return -1;
@@ -174,20 +172,17 @@ static int type_parse(TALLOC_CTX *ctx, void *out, CONF_ITEM *ci, UNUSED CONF_PAR
 		return -1;
 	}
 
-	if (!priorities[code]) {
+	if (!type_lib_table[code]) {
 		cf_log_err(ci, "Cannot listen for unsupported 'type = %s'", type_str);
 		return -1;
 	}
 
 	for (i = 0; i < (sizeof(type_lib_table) / sizeof(*type_lib_table)); i++) {
 		name = type_lib_table[i];
-		if (name && (strcmp(name, type_str) == 0)) {
-			type_enum = fr_dict_enum_by_value(attr_dhcpv4_message_type, fr_box_uint32(i));
-			break;
-		}
+		if (name) break;
 	}
 
-	if (!name || !type_enum) {
+	if (!name) {
 		cf_log_err(ci, "Cannot listen for unsupported 'type = %s'", type_str);
 		return -1;
 	}
@@ -269,6 +264,13 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 
 	rad_assert(data[0] < FR_MAX_PACKET_CODE);
 
+	/*
+	 *	Set the request dictionary so that we can do
+	 *	generic->protocol attribute conversions as
+	 *	the request runs through the server.
+	 */
+	request->dict = dict_dhcpv4;
+
 #if 0
 	/*
 	 *	@todo - print hex packets here!
@@ -335,6 +337,8 @@ static ssize_t mod_encode(void const *instance, REQUEST *request, uint8_t *buffe
 	proto_dhcpv4_t const *inst = talloc_get_type_abort_const(instance, proto_dhcpv4_t);
 	fr_io_track_t const *track = talloc_get_type_abort_const(request->async->packet_ctx, fr_io_track_t);
 	fr_io_address_t *address = track->address;
+	dhcp_packet_t *reply = (dhcp_packet_t *) buffer;
+	dhcp_packet_t *original = (dhcp_packet_t *) request->packet->data;
 	ssize_t data_len;
 	RADCLIENT const *client;
 
@@ -347,10 +351,11 @@ static ssize_t mod_encode(void const *instance, REQUEST *request, uint8_t *buffe
 	}
 
 	/*
-	 *	"Do not respond"
+	 *	"Do not respond".  We also never send replies to a release.
 	 */
 	if ((request->reply->code == FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND) ||
-	    (request->reply->code == 0) || (request->reply->code >= FR_DHCP_MAX)) {
+	    (request->reply->code == 0) || (request->reply->code >= FR_DHCP_MAX) ||
+	    (request->packet->code == FR_DHCP_RELEASE)) {
 		*buffer = false;
 		return 1;
 	}
@@ -386,6 +391,20 @@ static ssize_t mod_encode(void const *instance, REQUEST *request, uint8_t *buffe
 		memcpy(buffer, &new_client, sizeof(new_client));
 		return sizeof(new_client);
 	}
+
+	memset(reply, 0, sizeof(*reply));
+
+	/*
+	 *	Initialize the output packet from the input packet.
+	 */
+#define COPY(_x) reply->_x = original->_x
+#define MEMCPY(_x) memcpy(&reply->_x, &original->_x, sizeof(reply->_x))
+
+	COPY(htype);
+	COPY(hlen);
+	COPY(xid);
+	COPY(xid);
+	MEMCPY(chaddr);
 
 	/*
 	 *	If the app_io encodes the packet, then we don't need
@@ -428,9 +447,9 @@ static void mod_entry_point_set(void const *instance, REQUEST *request)
 	 *	'track' can be NULL when there's no network listener.
 	 */
 	if (inst->io.app_io && (track->dynamic == request->async->recv_time)) {
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 
-		app_process = (fr_app_process_t const *) inst->dynamic_submodule->module->common;
+		app_process = (fr_app_worker_t const *) inst->dynamic_submodule->module->common;
 
 		request->async->process = app_process->entry_point;
 		track->dynamic = 0;
@@ -443,7 +462,7 @@ static void mod_entry_point_set(void const *instance, REQUEST *request)
 		return;
 	}
 
-	request->async->process = ((fr_app_process_t const *)type_submodule->module->common)->entry_point;
+	request->async->process = ((fr_app_worker_t const *)type_submodule->module->common)->entry_point;
 	request->async->process_inst = type_submodule->data;
 }
 
@@ -581,8 +600,6 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 
 		/*
 		 *	We only process recv/send sections.
-		 *	proto_dhcpv4_auth will handle the
-		 *	"authenticate" sections.
 		 */
 		if ((strcmp(name, "recv") != 0) &&
 		    (strcmp(name, "send") != 0)) {
@@ -604,25 +621,12 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 		 *	Check that the packet type is known.
 		 */
 		packet_type = cf_section_name2(subcs);
-		dv = fr_dict_enum_by_alias(attr_dhcpv4_message_type, packet_type, -1);
+		dv = fr_dict_enum_by_alias(attr_message_type, packet_type, -1);
 		if (!dv || ((dv->value->vb_uint32 > FR_DHCP_MAX) &&
 			    (dv->value->vb_uint32 == FR_DHCP_MESSAGE_TYPE_VALUE_DHCP_DO_NOT_RESPOND))) {
 			cf_log_err(subcs, "Invalid DHCPV4 packet type in '%s %s {...}'",
 				   name, packet_type);
 			return -1;
-		}
-
-		/*
-		 *	Skip 'recv foo' when it's a request packet
-		 *	that isn't used by this instance.  Note that
-		 *	we DO compile things like 'recv
-		 *	Access-Accept', so that rlm_dhcpv4 can use it.
-		 */
-		if ((strcmp(name, "recv") == 0) && (dv->value->vb_uint32 <= FR_DHCP_MAX) &&
-		    fr_request_packets[dv->value->vb_uint32] &&
-		    !inst->code_allowed[dv->value->vb_uint32]) {
-			cf_log_warn(subcs, "Skipping %s %s { ...}", name, packet_type);
-			continue;
 		}
 
 		/*
@@ -649,11 +653,11 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 */
 	i = 0;
 	while ((cp = cf_pair_find_next(conf, cp, "type"))) {
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 		fr_dict_enum_t const	*enumv;
 		int code;
 
-		app_process = (fr_app_process_t const *)inst->type_submodule[i]->module->common;
+		app_process = (fr_app_worker_t const *)inst->type_submodule[i]->module->common;
 		if (app_process->instantiate && (app_process->instantiate(inst->type_submodule[i]->data,
 									  inst->type_submodule[i]->conf) < 0)) {
 			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
@@ -714,9 +718,9 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 *	Instantiate proto_dhcpv4_dynamic_client
 	 */
 	{
-		fr_app_process_t const	*app_process;
+		fr_app_worker_t const	*app_process;
 
-		app_process = (fr_app_process_t const *)inst->dynamic_submodule->module->common;
+		app_process = (fr_app_worker_t const *)inst->dynamic_submodule->module->common;
 		if (app_process->instantiate && (app_process->instantiate(inst->dynamic_submodule->data, conf) < 0)) {
 			cf_log_err(conf, "Instantiation failed for \"%s\"", app_process->name);
 			return -1;
@@ -742,7 +746,6 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	proto_dhcpv4_t 		*inst = talloc_get_type_abort(instance, proto_dhcpv4_t);
 	size_t			i = 0;
 	CONF_PAIR		*cp = NULL;
-	CONF_SECTION		*subcs;
 
 	/*
 	 *	Ensure that the server CONF_SECTION is always set.
@@ -750,7 +753,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	inst->io.server_cs = cf_item_to_section(cf_parent(conf));
 
 	rad_assert(dict_dhcpv4 != NULL);
-	rad_assert(attr_dhcpv4_message_type != NULL);
+	rad_assert(attr_message_type != NULL);
 
 	/*
 	 *	Bootstrap the process modules
@@ -758,7 +761,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	while ((cp = cf_pair_find_next(conf, cp, "type"))) {
 		char const		*value;
 		dl_t const		*module = talloc_get_type_abort_const(inst->type_submodule[i]->module, dl_t);
-		fr_app_process_t const	*app_process = (fr_app_process_t const *)module->common;
+		fr_app_worker_t const	*app_process = (fr_app_worker_t const *)module->common;
 
 		if (app_process->bootstrap && (app_process->bootstrap(inst->type_submodule[i]->data,
 								      inst->type_submodule[i]->conf) < 0)) {
@@ -802,20 +805,6 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 
 	FR_TIMEVAL_BOUND_CHECK("nak_lifetime", &inst->io.nak_lifetime, >=, 1, 0);
 	FR_TIMEVAL_BOUND_CHECK("nak_lifetime", &inst->io.nak_lifetime, <=, 600, 0);
-
-	/*
-	 *	Hide this for now.  It's only for people who know what
-	 *	they're doing.
-	 */
-	subcs = cf_section_find(conf, "priority", NULL);
-	if (subcs) {
-		if (cf_section_rules_push(subcs, priority_config) < 0) return -1;
-		if (cf_section_parse(NULL, NULL, subcs) < 0) return -1;
-
-	} else {
-		rad_assert(sizeof(inst->priorities) == sizeof(priorities));
-		memcpy(&inst->priorities, &priorities, sizeof(priorities));
-	}
 
 	/*
 	 *	Tell the master handler about the main protocol instance.
@@ -862,7 +851,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 static int mod_load(void)
 {
 	if (fr_dhcpv4_init() < 0) {
-		PERROR("Failed initialising DHCP");
+		PERROR("Failed initialising protocol library");
 		return -1;
 	}
 
