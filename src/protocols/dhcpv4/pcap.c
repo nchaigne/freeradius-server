@@ -24,7 +24,7 @@
  * @copyright 2008 Alan DeKok <aland@deployingradius.com>
  */
 
-#ifdef HAVE_PCAP_H
+#ifdef HAVE_LIBPCAP
 #include <freeradius-devel/pcap.h>
 #include "dhcpv4.h"
 
@@ -141,7 +141,7 @@ RADIUS_PACKET *fr_dhcpv4_pcap_recv(fr_pcap_t *pcap)
 		return NULL;
 	}
 
-	link_len = fr_link_layer_offset(data, header->caplen, pcap->link_layer);
+	link_len = fr_pcap_link_layer_offset(data, header->caplen, pcap->link_layer);
 	if (link_len < 0) {
 		fr_strerror_printf_push("Failed determining link layer header offset");
 		return NULL;
@@ -224,4 +224,4 @@ RADIUS_PACKET *fr_dhcpv4_pcap_recv(fr_pcap_t *pcap)
 	packet->if_index = pcap->if_index;
 	return packet;
 }
-#endif	/* HAVE_PCAP_H */
+#endif	/* HAVE_LIBPCAP */

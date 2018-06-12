@@ -131,7 +131,6 @@ static ssize_t mod_read(void *instance, UNUSED void **packet_ctx, fr_time_t **re
 		return 0;
 	}
 
-
 	// @todo - maybe convert timestamp?
 	*recv_time_p = fr_time();
 
@@ -284,11 +283,12 @@ static int mod_fd(void const *instance)
  * @param[in] instance of the RADIUS TCP I/O path.
  * @param[in] fd the FD to set
  */
-static void mod_fd_set(void *instance, int fd)
+static int mod_fd_set(void *instance, int fd)
 {
 	proto_control_tcp_t *inst = talloc_get_type_abort(instance, proto_control_tcp_t);
 
 	inst->sockfd = fd;
+	return 0;
 }
 
 static int mod_instantiate(void *instance, UNUSED CONF_SECTION *cs)
