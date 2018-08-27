@@ -137,6 +137,16 @@ char *ncc_endpoint_sprint(char *out, ncc_endpoint_t *ep)
 	return out;
 }
 
+/*
+ *	Print an ethernet address in a buffer.
+ */
+char *ncc_ether_addr_sprint(char *out, const uint8_t *addr)
+{
+	sprintf(out, "%02x:%02x:%02x:%02x:%02x:%02x",
+	        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+	return out;
+}
+
 
 /*
  *	Resolve host address and port.
