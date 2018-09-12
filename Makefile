@@ -340,10 +340,42 @@ whitespace:
 
 CONF_FILES := $(wildcard raddb/*conf raddb/mods-available/* raddb/sites-available/*)
 ADOC_FILES := $(patsubst raddb/%,asciidoc/%.adoc,$(CONF_FILES))
+ADOC_FILES += $(patsubst raddb/%.md,asciidoc/%.adoc,$(shell find raddb -name "*\.md" -print))
+PDF_FILES := $(patsubst raddb/%.adoc,asciidoc/%.pdf,$(ADOC_FILES))
 
+#
+#  Markdown files get converted to asciidoc via pandoc.
+#
+#  Many documentation files are in markdown because it's a simpler
+#  format to read/write than asciidoc.  But we want a consistent "look
+#  and feel" for the documents, so we make all of them asciidoc.
+#
+asciidoc/%.adoc: raddb/%.md
+	@echo PANDOC $^
+	@mkdir -p $(dir $@)
+	@pandoc -w asciidoc -o $@ $^
+
+#
+#  Conf files get converted to Asciidoc via our own magic script.
+#
 asciidoc/%.adoc: raddb/%
 	@echo ADOC $^
 	@mkdir -p $(dir $@)
-	@./scripts/conf2adoc < $^ > $@
+	@./scripts/asciidoc/conf2adoc -a ${top_srcdir}/asciidoc < $^ > $@
 
+asciidoc/%.pdf: asciidoc/%.adoc
+	@echo PDF $^
+	@asciidoctor $< -b docbook5 -o - | \
+		pandoc -f docbook -t latex --latex-engine=xelatex \
+			-V papersize=letter \
+			-V images=yes \
+			--template=./scripts/asciidoc/freeradius.template -o $@
+
+asciidoc/%.pdf: raddb/%.md
+	@echo PDF $^
+	pandoc -f markdown -t latex --latex-engine=xelatex \
+		-V papersize=letter \
+		--template=./scripts/asciidoc/freeradius.template -o $@ $<
+
+.PHONY: asciidoc
 asciidoc: $(ADOC_FILES)

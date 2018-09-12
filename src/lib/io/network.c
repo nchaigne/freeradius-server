@@ -438,6 +438,9 @@ next_message:
 		return;
 	}
 
+	cd->request.is_dup = false;
+	cd->priority = PRIORITY_NORMAL;
+
 	/*
 	 *	Read data from the network.
 	 *
@@ -799,7 +802,7 @@ static void fr_network_socket_callback(void *ctx, void const *data, size_t data_
 			       NULL,
 			       fr_network_error,
 			       s) < 0) {
-		PERROR("Failed adding new socket to event loop");
+		PERROR("Failed adding new socket to network event loop");
 		talloc_free(s);
 		return;
 	}
